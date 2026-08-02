@@ -1,0 +1,16 @@
+[package]
+name = "jobwrap-pty"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Linux process and terminal logic: PTY allocation, process groups, signal forwarding, terminal guards."
+
+[dependencies]
+jobwrap-core = { workspace = true }
+libc = { workspace = true }
+signal-hook = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]

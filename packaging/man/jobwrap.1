@@ -1,0 +1,85 @@
+.TH JOBWRAP 1 "August 2026" "jobwrap 0.1" "User Commands"
+.SH NAME
+jobwrap \- wrap a locally launched Linux process with monitoring and control
+.SH SYNOPSIS
+.B jobwrap
+[\fIOPTIONS\fR] \fICOMMAND\fR [\fIARGUMENTS\fR...]
+.br
+.B jobwrap \fISUBCOMMAND\fR [\fIARGS\fR]
+.SH DESCRIPTION
+\fBjobwrap\fR runs \fICOMMAND\fR inside a pseudo-terminal so it behaves exactly
+like a normal foreground command, while a per-user daemon provides a web
+interface, an HTTP API, and scoped control of the process.
+.PP
+If the first word is not a recognized subcommand it is treated as the command
+to run, so \fBjobwrap python3 analysis.py\fR works directly. Use
+\fBjobwrap -- COMMAND\fR to make that explicit.
+.SH WRAPPER OPTIONS
+.TP
+.B \-\-name \fINAME\fR
+A human-readable name for the job.
+.TP
+.B \-\-profile \fINAME\fR
+The access profile to use (defaults to the configured profile).
+.TP
+.B \-\-detach
+Detach from the terminal and run in the background.
+.TP
+.B \-\-no-web
+Do not start or use the web server.
+.TP
+.B \-\-no-record
+Do not record terminal output to the log.
+.SH SUBCOMMANDS
+.TP
+.B list
+List registered jobs.
+.TP
+.B show \fIJOB\fR
+Show detailed information about one job.
+.TP
+.B logs \fIJOB\fR [\-\-offset N]
+Print a job's recorded output.
+.TP
+.B signal \fIJOB\fR \fISIGNAL\fR
+Send a named signal (int, term, stop, cont, kill) to a job's process group.
+.TP
+.B stop \fIJOB\fR
+Send SIGTERM to a job's process group.
+.TP
+.B open [\fIJOB\fR]
+Open the web interface in a browser.
+.TP
+.B daemon status|start|stop
+Manage the per-user daemon.
+.TP
+.B config init|validate|effective|explain
+Manage the configuration.
+.TP
+.B auth set-password|remove-password|status
+Manage the browser password.
+.TP
+.B token create|list|revoke
+Manage scoped API tokens.
+.SH EXIT STATUS
+The wrapper returns the child's exit code. Signals are reported as 128 plus the
+signal number. Internal failures before the child starts use dedicated codes.
+.SH FILES
+.TP
+.I ~/.config/jobwrap/config.toml
+Configuration (see \fBjobwrap.toml(5)\fR).
+.TP
+.I $XDG_RUNTIME_DIR/jobwrap/daemon.sock
+The private daemon socket.
+.TP
+.I ~/.local/state/jobwrap/jobwrap.db
+SQLite database.
+.TP
+.I ~/.local/state/jobwrap/logs/
+Append-only terminal logs.
+.SH SECURITY
+See \fI/usr/share/doc/jobwrap/README.md\fR and the security model. The daemon
+binds to loopback by default and never creates arbitrary processes.
+.SH SEE ALSO
+.BR jobwrapd (8),
+.BR jobwrap.toml (5)

@@ -1,0 +1,26 @@
+[package]
+name = "jobwrap-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Axum HTTP routes, middleware, WebSockets and the browser interface for jobwrap."
+
+[dependencies]
+jobwrap-core = { workspace = true }
+jobwrap-protocol = { workspace = true }
+jobwrap-auth = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+url = { workspace = true }
+idna = { workspace = true }

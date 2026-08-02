@@ -1,0 +1,36 @@
+.TH JOBWRAPD 8 "August 2026" "jobwrap 0.1" "System Administration"
+.SH NAME
+jobwrapd \- the per-user jobwrap daemon
+.SH SYNOPSIS
+.B jobwrapd
+[\fB--foreground\fR] [\fB--socket \fIPATH\fR]
+.SH DESCRIPTION
+\fBjobwrapd\fR is the per-user daemon that provides the web interface, HTTP
+API, authentication, job registry, log storage, and access control for
+jobwrap. It runs as the invoking user, never as root, and never creates
+arbitrary processes.
+.PP
+It is normally started automatically by \fBjobwrap\fR, or through the user
+systemd units. It binds an HTTP listener to loopback and listens on a private
+Unix socket.
+.SH OPTIONS
+.TP
+.B \-\-foreground
+Run in the foreground and do not detach.
+.TP
+.B \-\-socket \fIPATH\fR
+Path to the Unix socket (defaults to the XDG runtime dir).
+.SH FILES
+.TP
+.I $XDG_RUNTIME_DIR/jobwrap/daemon.sock
+The private socket (mode 0600).
+.TP
+.I $XDG_RUNTIME_DIR/jobwrap/daemon.pid
+The daemon pid.
+.SH SECURITY
+The daemon verifies each socket peer's UID via SO_PEERCRED. The HTTP server
+binds to loopback by default. Configuration and the security model are
+documented in jobwrap(1) and the installed README.
+.SH SEE ALSO
+.BR jobwrap (1),
+.BR jobwrap.toml (5)

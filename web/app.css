@@ -1,0 +1,74 @@
+/* jobwrap minimal frontend styles */
+:root {
+  --bg: #0f1115;
+  --panel: #161a22;
+  --border: #262c38;
+  --text: #d7dde8;
+  --muted: #8a93a6;
+  --accent: #4c9aff;
+  --danger: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+header h1 { font-size: 1.1rem; margin: 0; }
+.auth-badge { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
+.login-link { color: var(--accent); }
+.back-link { color: var(--accent); text-decoration: none; }
+.state { margin-left: auto; color: var(--muted); }
+
+main { padding: 1.25rem; max-width: 1000px; margin: 0 auto; }
+
+table.jobs { width: 100%; border-collapse: collapse; }
+table.jobs th, table.jobs td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+table.jobs th { color: var(--muted); font-weight: 500; font-size: 0.85rem; }
+table.jobs a { color: var(--accent); text-decoration: none; }
+
+.terminal {
+  background: #05070a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  min-height: 16rem;
+  max-height: 40rem;
+  overflow: auto;
+  font-family: ui-monospace, "Cascadia Mono", Menlo, monospace;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.connection { margin-top: 0.5rem; color: var(--muted); font-size: 0.85rem; }
+
+.controls { margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.controls button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+.controls button:hover { border-color: var(--accent); }
+.controls button[data-signal="kill"] { color: var(--danger); }
+
+.login-form { max-width: 24rem; margin: 3rem auto; display: flex; flex-direction: column; gap: 0.5rem; }
+.login-form input { padding: 0.5rem; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 5px; }
+.login-form button { padding: 0.5rem; background: var(--accent); border: 0; border-radius: 5px; color: #fff; cursor: pointer; }
+.error { color: var(--danger); }

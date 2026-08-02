@@ -1,0 +1,11 @@
+[Unit]
+Description=jobwrap per-user daemon
+Documentation=man:jobwrapd(8)
+
+[Service]
+Type=notify
+ExecStart=/usr/libexec/jobwrap/jobwrapd --foreground
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+[package]
+name = "jobwrap-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Domain types, state machines, and authorization primitives for jobwrap."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+getrandom = { workspace = true }

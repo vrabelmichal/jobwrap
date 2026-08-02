@@ -1,0 +1,42 @@
+[package]
+name = "jobwrap-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The per-user jobwrap daemon: composition root, live job registry, wrapper connections, recovery."
+
+[[bin]]
+name = "jobwrapd"
+path = "src/main.rs"
+
+[dependencies]
+jobwrap-core = { workspace = true }
+jobwrap-config = { workspace = true }
+jobwrap-protocol = { workspace = true }
+jobwrap-store = { workspace = true }
+jobwrap-auth = { workspace = true }
+jobwrap-web = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+fd-lock = { workspace = true }
+nix = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+clap = { workspace = true }
+base64 = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[package.metadata.deb]
+maintainer = "jobwrap contributors"
+copyright = "2026, jobwrap contributors"
+license-file = ["../../LICENSE", "0"]
+section = "utils"
+priority = "optional"
+assets = [
+  ["target/release/jobwrapd", "usr/libexec/jobwrap/", "755"],
+]

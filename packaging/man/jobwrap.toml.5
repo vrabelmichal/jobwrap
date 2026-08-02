@@ -1,0 +1,52 @@
+.TH JOBWRAP.TOML 5 "August 2026" "jobwrap 0.1" "File Formats"
+.SH NAME
+jobwrap.toml \- jobwrap configuration file
+.SH DESCRIPTION
+The jobwrap configuration lives at \fI~/.config/jobwrap/config.toml\fR.
+\fBconfig_version = 1\fR is required. Unknown fields are rejected.
+.SH SECTIONS
+.TP
+.B [server]
+\fBbind\fR (default 127.0.0.1), \fBport\fR (default 8765),
+\fBpublic_base_url\fR, \fBopen_browser_on_start\fR, \fBallow_remote_bind\fR
+(default false).
+.TP
+.B [daemon]
+\fBauto_start\fR (default true), \fBidle_shutdown_minutes\fR (default 0).
+.TP
+.B [defaults]
+\fBprofile\fR, \fBallocate_pty\fR, \fBrecord_output\fR,
+\fBretain_completed_days\fR, \fBmaximum_log_bytes\fR, \fBshow_job_url\fR,
+\fBjob_name_template\fR.
+.TP
+.B [authentication]
+\fBtrust_local_owner\fR, \fBbrowser_session_minutes\fR,
+\fBpassword_attempt_limit\fR, \fBpassword_attempt_window_seconds\fR.
+.TP
+.B [profiles.NAME]
+Access fields: \fBstatus\fR, \fBoutput\fR, \fBcommand\fR,
+\fBworking_directory\fR, \fBsend_input\fR, \fBsignal_interrupt\fR,
+\fBsignal_terminate\fR, \fBsignal_stop\fR, \fBsignal_continue\fR,
+\fBsignal_kill\fR, \fBrestart\fR, \fBdelete\fR.
+.SH ACCESS LEVELS
+Each access field accepts one of:
+.RS
+.IP public
+Anyone.
+.IP authenticated
+Any session or token.
+.IP controller
+A logged-in browser session, or a token with a matching grant.
+.IP owner
+The local Unix user who launched the job.
+.IP disabled
+Nobody.
+.RE
+.PP
+Public output may itself contain secrets; use the private profile for
+sensitive work.
+.SH PRECEDENCE
+Built-in defaults, user configuration, named profile, trusted project
+configuration, environment, then command-line options.
+.SH SEE ALSO
+.BR jobwrap (1)

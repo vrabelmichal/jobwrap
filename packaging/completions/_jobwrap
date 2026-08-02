@@ -1,0 +1,45 @@
+#compdef jobwrap
+# zsh completion for jobwrap
+
+_jobwrap() {
+    local -a subcommands
+    subcommands=(
+        'list:List registered jobs'
+        'show:Show job details'
+        'logs:Print a job output log'
+        'attach:Attach to a job (experimental)'
+        'signal:Send a named signal'
+        'stop:Send SIGTERM'
+        'open:Open the web interface'
+        'daemon:Manage the daemon'
+        'config:Manage configuration'
+        'auth:Manage password authentication'
+        'token:Manage API tokens'
+    )
+
+    if (( CURRENT == 2 )); then
+        _describe 'command' subcommands
+        _files
+        return
+    fi
+
+    case "${words[2]}" in
+        signal)
+            _values 'signal' int term hup quit stop cont kill
+            ;;
+        daemon)
+            _values 'action' status start stop
+            ;;
+        config)
+            _values 'action' path init validate effective explain
+            ;;
+        auth)
+            _values 'action' set-password remove-password status
+            ;;
+        token)
+            _values 'action' create list revoke
+            ;;
+    esac
+}
+
+_jobwrap "$@"

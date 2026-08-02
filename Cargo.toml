@@ -1,0 +1,91 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/jobwrap-core",
+    "crates/jobwrap-config",
+    "crates/jobwrap-protocol",
+    "crates/jobwrap-pty",
+    "crates/jobwrap-store",
+    "crates/jobwrap-auth",
+    "crates/jobwrap-web",
+    "crates/jobwrap-daemon",
+    "crates/jobwrap-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.72"
+license = "MIT"
+authors = ["jobwrap contributors"]
+repository = "https://example.invalid/jobwrap"
+description = "Wrap a locally launched Linux process and securely expose monitoring and narrowly authorized control."
+
+# All versions are pinned exactly. The workspace currently builds on Rust
+# 1.72.1; the registry has since shipped crates that require newer compilers
+# (edition 2024 and raised MSRVs), so Cargo.lock must stay pinned to this
+# generation of dependencies. Update deliberately in separate pull requests.
+[workspace.dependencies]
+jobwrap-core = { path = "crates/jobwrap-core" }
+jobwrap-config = { path = "crates/jobwrap-config" }
+jobwrap-protocol = { path = "crates/jobwrap-protocol" }
+jobwrap-pty = { path = "crates/jobwrap-pty" }
+jobwrap-store = { path = "crates/jobwrap-store" }
+jobwrap-auth = { path = "crates/jobwrap-auth" }
+jobwrap-web = { path = "crates/jobwrap-web" }
+jobwrap-daemon = { path = "crates/jobwrap-daemon" }
+jobwrap-cli = { path = "crates/jobwrap-cli" }
+
+anyhow = "=1.0.75"
+thiserror = "=1.0.50"
+serde = { version = "=1.0.188", features = ["derive"] }
+serde_json = "=1.0.107"
+toml = "=0.7.8"
+tracing = "=0.1.40"
+tracing-subscriber = { version = "=0.3.18", features = ["env-filter", "fmt"] }
+tokio = { version = "=1.33.0", features = ["rt-multi-thread", "net", "io-util", "signal", "time", "sync", "macros", "process", "fs"] }
+axum = { version = "=0.6.20", features = ["ws"] }
+tower = { version = "=0.4.13", features = ["util"] }
+tower-http = { version = "=0.4.4", features = ["trace", "limit", "catch-panic"] }
+hyper = { version = "=0.14.27", features = ["full"] }
+clap = { version = "=4.4.5", features = ["derive", "wrap_help"] }
+nix = { version = "=0.28.0", features = ["fs", "term", "signal", "process", "poll", "sched", "socket", "uio", "user", "ioctl"] }
+libc = "=0.2.155"
+signal-hook = "=0.3.17"
+rusqlite = { version = "=0.30.0", features = ["bundled", "chrono"] }
+base64 = "=0.21.5"
+chrono = { version = "=0.4.31", features = ["serde"] }
+sha2 = "=0.10.8"
+rand = "=0.8.5"
+argon2 = "=0.5.3"
+getrandom = "=0.2.15"
+fd-lock = "=3.0.13"
+bytes = "=1.5.0"
+# Transitive pins: the current registry ships crates requiring Rust > 1.72.
+# These are listed so Cargo resolves to versions compatible with this
+# toolchain. They are only force-pinned; code should not depend on them.
+url = "=2.4.0"
+idna = "=0.4.0"
+base64ct = "=1.6.0"
+indexmap = "=2.2.6"
+
+[workspace.lints.rust]
+# `unsafe_code` is forbid via a crate attribute in every crate except
+# jobwrap-pty, which isolates its FFI in src/ffi.rs (see its safety comments).
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "warn"
+nursery = "warn"
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+
+[profile.release]
+# Kept deliberately modest so release builds stay feasible; tighten
+# (lto = "thin", codegen-units = 1) for the smallest, fastest binaries.
+codegen-units = 16
+strip = true
