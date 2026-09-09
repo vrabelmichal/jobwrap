@@ -107,8 +107,10 @@ $XDG_DATA_HOME/jobwrap/web/
 ```
 
 `jobwrap` auto-starts `jobwrapd` under a lock, waits for its socket, and
-verifies the socket owner's UID before trusting it. A systemd user unit is
-provided but not required.
+verifies the socket owner's UID before trusting it. The daemon can also be
+started directly with `jobwrap daemon start` (background) or
+`jobwrap daemon start --foreground` (attached to the terminal). A systemd
+user unit is provided but not required.
 
 ## Crates
 

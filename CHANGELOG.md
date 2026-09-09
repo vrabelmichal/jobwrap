@@ -2,6 +2,14 @@
 
 All notable changes to jobwrap are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `jobwrap daemon start --foreground` runs the daemon attached to the
+  current terminal (Ctrl+C stops it) instead of in the background.
+- `jobwrap daemon start` prints the web interface URL after starting.
+
 ## [0.1.0] - 2026-08-01
 
 ### Added

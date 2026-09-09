@@ -98,8 +98,13 @@ pub enum Command {
 pub enum DaemonCommand {
     /// Report whether the daemon is running.
     Status,
-    /// Start the daemon.
-    Start,
+    /// Start the daemon in the background and print the web interface URL.
+    Start {
+        /// Run the daemon attached to this terminal instead of in the
+        /// background (Ctrl+C stops it).
+        #[arg(long)]
+        foreground: bool,
+    },
     /// Stop the daemon.
     Stop,
 }

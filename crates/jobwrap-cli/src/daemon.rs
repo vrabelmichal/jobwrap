@@ -200,7 +200,7 @@ fn verify_peer_uid(stream: &UnixStream) -> Result<(), ClientError> {
 }
 
 /// Locate the `jobwrapd` binary.
-fn find_daemon_binary() -> Option<std::path::PathBuf> {
+pub(crate) fn find_daemon_binary() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("JOBWRAPD_BIN") {
         let p = std::path::PathBuf::from(p);
         if p.is_file() {

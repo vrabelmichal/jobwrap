@@ -222,9 +222,15 @@ fn daemon(action: DaemonCommand) -> anyhow::Result<()> {
                 Ok(())
             }
         },
-        DaemonCommand::Start => {
+        DaemonCommand::Start { foreground } => {
+            if foreground {
+                return start_daemon_foreground(&paths);
+            }
             let client = DaemonClient::connect(&paths, true).context("starting daemon")?;
             println!("daemon running (pid {})", client.daemon_pid);
+            let config = load_effective()?;
+            let base = config.server.public_base_url.trim_end_matches('/');
+            println!("web interface: {base}/");
             Ok(())
         }
         DaemonCommand::Stop => {
@@ -242,6 +248,24 @@ fn daemon(action: DaemonCommand) -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// Run `jobwrapd` in the foreground by replacing this process. Ctrl+C reaches
+/// the daemon directly, so no signal forwarding is needed.
+fn start_daemon_foreground(paths: &jobwrap_config::RuntimePaths) -> anyhow::Result<()> {
+    if let Ok(client) = DaemonClient::connect(paths, false) {
+        bail!(
+            "daemon is already running (pid {}); stop it first with `jobwrap daemon stop`",
+            client.daemon_pid
+        );
+    }
+    let binary = crate::daemon::find_daemon_binary()
+        .ok_or_else(|| anyhow!("jobwrapd is not installed; set JOBWRAPD_BIN to its location"))?;
+    use std::os::unix::process::CommandExt;
+    let error = std::process::Command::new(&binary)
+        .arg("--foreground")
+        .exec();
+    Err(anyhow!("could not exec {}: {error}", binary.display()))
 }
 
 fn config(action: ConfigCommand) -> anyhow::Result<()> {

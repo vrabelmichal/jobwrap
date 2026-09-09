@@ -21,8 +21,15 @@ The exit code is the child's.
 cargo build --release
 export PATH="$PWD/target/release:$PATH"
 
-# start the daemon (or let jobwrap auto-start it) and run a command:
-jobwrap bash -c 'while true; do date; sleep 1; done'
+# start the daemon and its web interface (it prints the URL):
+jobwrap daemon start
+```
+
+Or skip that step entirely: `jobwrap` starts the daemon automatically the
+first time it needs one. Just run a command:
+
+```sh
+jobwrap top                  # any command; colors and Ctrl+C work
 ```
 
 In another terminal:
@@ -31,9 +38,12 @@ In another terminal:
 jobwrap list                 # list jobs
 jobwrap show <JOB_ID>        # details
 jobwrap signal <JOB_ID> int  # send SIGINT
+jobwrap daemon stop          # stop the daemon
 ```
 
-Open the printed web URL for live output.
+Open the printed web URL for live output. Use
+`jobwrap daemon start --foreground` to keep the daemon attached to the
+terminal instead of the background.
 
 ## Layout
 
