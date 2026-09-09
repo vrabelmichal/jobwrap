@@ -2,9 +2,11 @@
 
 use std::collections::HashMap;
 use std::io::Read;
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -21,7 +23,7 @@ const ENV_ALLOW_LIST: &[&str] = &["LANG", "LC_ALL", "TERM", "TZ"];
 /// How long a preview stays valid before execution is refused.
 const PREVIEW_TTL: Duration = Duration::from_secs(300);
 const MAX_STORED_PREVIEWS: usize = 64;
-const MAX_STORED_RESULTS: usize = 64;
+const MAX_STORED_RESULTS: usize = 32;
 
 /// In-memory stores for probe previews and results.
 #[derive(Debug, Default)]
@@ -152,6 +154,17 @@ pub fn preview_help_probe(
     store: &ProbeStore,
     req: &HelpProbeRequest,
 ) -> Result<ProbePreview, String> {
+    if req.target.is_empty()
+        || req.target.len() > 4096
+        || req
+            .probe_argument
+            .as_ref()
+            .is_some_and(|argument| argument.len() > 4096 || argument.contains('\0'))
+        || req.idempotency_key.is_empty()
+        || req.idempotency_key.len() > 128
+    {
+        return Err("probe target, argument, or idempotency key exceeds safety limits".into());
+    }
     let invocation = build_invocation(req)?;
     let executes_target = matches!(
         req.kind,
@@ -275,6 +288,15 @@ fn run_sandboxed(
         }
     };
     let pid = child.id() as i32;
+    let stop_readers = Arc::new(AtomicBool::new(false));
+    let stdout_reader = child
+        .stdout
+        .take()
+        .and_then(|output| spawn_output_reader(output, output_limit, Arc::clone(&stop_readers)));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .and_then(|output| spawn_output_reader(output, output_limit, Arc::clone(&stop_readers)));
 
     // Kill the child's process group on timeout.
     let started = Instant::now();
@@ -284,6 +306,13 @@ fn run_sandboxed(
         match child.try_wait() {
             Ok(Some(status)) => {
                 exit_code = status.code();
+                // A short-lived target may leave descendants holding output
+                // pipes or doing work. A probe ends the entire dedicated
+                // process group even after the direct child exits.
+                let _ = nix::sys::signal::killpg(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
                 break;
             }
             Ok(None) => {
@@ -305,45 +334,25 @@ fn run_sandboxed(
             }
             Err(_) => {
                 exit_code = None;
+                let _ = nix::sys::signal::killpg(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+                let _ = child.wait();
                 break;
             }
         }
     }
 
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    if let Some(mut out) = child.stdout.take() {
-        let mut buf = [0u8; 4096];
-        loop {
-            match out.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    stdout.extend_from_slice(&buf[..n]);
-                    if stdout.len() >= output_limit {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    }
+    stop_readers.store(true, Ordering::Release);
+    let mut stdout = stdout_reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let mut stderr = stderr_reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
     let remaining = output_limit.saturating_sub(stdout.len());
-    if let Some(mut err) = child.stderr.take() {
-        let mut buf = [0u8; 4096];
-        loop {
-            match err.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    stderr.extend_from_slice(&buf[..n]);
-                    if stderr.len() >= remaining {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    }
-    let output_truncated = stdout.len() >= output_limit || stderr.len() >= remaining;
+    let output_truncated = stdout.len().saturating_add(stderr.len()) > output_limit;
     if stdout.len() > output_limit {
         stdout.truncate(output_limit);
     }
@@ -380,6 +389,54 @@ fn run_sandboxed(
         sandbox_level: "limited-environment-only".into(),
         warning,
     }
+}
+
+fn spawn_output_reader<R>(
+    mut output: R,
+    output_limit: usize,
+    stop: Arc<AtomicBool>,
+) -> Option<std::thread::JoinHandle<Vec<u8>>>
+where
+    R: Read + AsRawFd + Send + 'static,
+{
+    use nix::fcntl::{fcntl, FcntlArg, OFlag};
+
+    let raw_fd = output.as_raw_fd();
+    let flags = fcntl(raw_fd, FcntlArg::F_GETFL).ok()?;
+    fcntl(
+        raw_fd,
+        FcntlArg::F_SETFL(OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK),
+    )
+    .ok()?;
+
+    std::thread::Builder::new()
+        .name("jobwrap-probe-output".into())
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            let mut buffer = [0u8; 8192];
+            loop {
+                match output.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        let remaining = output_limit.saturating_add(1).saturating_sub(bytes.len());
+                        bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+                        if bytes.len() > output_limit {
+                            break;
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if stop.load(Ordering::Acquire) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+            bytes
+        })
+        .ok()
 }
 
 fn classify(
@@ -434,7 +491,10 @@ fn temp_sandbox_dir() -> std::io::Result<PathBuf> {
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
     let dir = base.join(format!("jobwrap-probe-{id}"));
     std::fs::create_dir(&dir)?;
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    if let Err(error) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
+        let _ = std::fs::remove_dir(&dir);
+        return Err(error);
+    }
     Ok(dir)
 }
 
@@ -488,6 +548,15 @@ mod tests {
     #[test]
     fn unknown_when_killed_without_output() {
         assert_eq!(classify(false, None, "", ""), ProbeClassification::NoOutput);
+    }
+
+    #[test]
+    fn output_reader_can_stop_with_an_open_writer() {
+        let (reader, _writer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = spawn_output_reader(reader, 1024, Arc::clone(&stop)).expect("reader thread");
+        stop.store(true, Ordering::Release);
+        assert!(handle.join().expect("reader join").is_empty());
     }
 
     #[test]

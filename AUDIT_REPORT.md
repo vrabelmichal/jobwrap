@@ -35,6 +35,14 @@ to work safely.
 - Bounded browser terminal text, WebSockets, Unix connections, browser
   sessions, stored probes, probe concurrency, documentation subprocess time,
   and subprocess output.
+- Bounded in-memory jobs, pending launches, registered terminals, detached
+  terminal children, idempotency entries, and history query result sets.
+- Added strict size and NUL validation for wrapper registrations, launch
+  requests, terminal registrations, and probe requests.
+- Reworked probe output capture so full stdout/stderr pipes cannot deadlock the
+  target, and terminate the complete probe process group on every exit path.
+- Reap terminal-emulator children through one bounded worker instead of
+  dropping child handles and accumulating zombies.
 - Limited static shebang inspection to 8 KiB of regular files; FIFOs/devices
   are never opened for content inspection.
 - Fixed completed-job history and log access after daemon restart.

@@ -150,6 +150,11 @@ pub fn attach_launch(launch_id: &str) -> anyhow::Result<i32> {
     drop(read);
     drop(write);
 
+    if let Some(directory) = &request.working_directory {
+        std::env::set_current_dir(directory)
+            .with_context(|| format!("using launch working directory {directory}"))?;
+    }
+
     let saved = SavedTerminal::capture(0);
     let _guard = TerminalGuard::new(&saved);
     let mut pty = PseudoTerminal::allocate().context("allocating pseudo-terminal")?;
@@ -175,7 +180,7 @@ pub fn attach_launch(launch_id: &str) -> anyhow::Result<i32> {
     let profile_name = request
         .profile_name
         .clone()
-        .unwrap_or_else(|| config.defaults.profile.clone());
+        .unwrap_or_else(|| config.launch.default_profile.clone());
     let job_name = request
         .display_name
         .clone()

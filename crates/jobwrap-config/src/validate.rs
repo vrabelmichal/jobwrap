@@ -17,8 +17,16 @@ pub enum ValidationIssue {
     ZeroAttemptLimit,
     /// A session length of zero disables sessions immediately.
     ZeroSessionMinutes,
-    /// The selected profile does not exist.
+    /// A selected profile does not exist.
     UnknownProfile { name: String },
+    /// A safety-critical switch was disabled.
+    RequiredSafetySetting { field: &'static str },
+    /// A string setting does not name a supported implementation.
+    InvalidChoice {
+        field: &'static str,
+        value: String,
+        allowed: &'static str,
+    },
     InvalidLimit {
         field: &'static str,
         value: u64,
@@ -48,7 +56,17 @@ impl fmt::Display for ValidationIssue {
                 f.write_str("browser_session_minutes = 0 expires sessions immediately")
             }
             ValidationIssue::UnknownProfile { name } => {
-                write!(f, "default profile `{name}` is not defined")
+                write!(f, "configured profile `{name}` is not defined")
+            }
+            ValidationIssue::RequiredSafetySetting { field } => {
+                write!(f, "{field} must be true")
+            }
+            ValidationIssue::InvalidChoice {
+                field,
+                value,
+                allowed,
+            } => {
+                write!(f, "{field} = `{value}` is unsupported; expected {allowed}")
             }
             ValidationIssue::InvalidLimit {
                 field,
@@ -99,6 +117,36 @@ pub fn validate_effective(cfg: &EffectiveConfig) -> Vec<ValidationIssue> {
         });
     }
     if cfg.launch.enabled {
+        if !cfg.profiles.contains_key(&cfg.launch.default_profile) {
+            issues.push(ValidationIssue::UnknownProfile {
+                name: cfg.launch.default_profile.clone(),
+            });
+        }
+        if !cfg.launch.require_idempotency_key {
+            issues.push(ValidationIssue::RequiredSafetySetting {
+                field: "launch.require_idempotency_key",
+            });
+        }
+        if !matches!(
+            cfg.launch.default_terminal_mode.as_str(),
+            "new-terminal" | "new_terminal"
+        ) {
+            issues.push(ValidationIssue::InvalidChoice {
+                field: "launch.default_terminal_mode",
+                value: cfg.launch.default_terminal_mode.clone(),
+                allowed: "new-terminal",
+            });
+        }
+        if !matches!(
+            cfg.terminal.preferred_backend.as_str(),
+            "gnome-terminal" | "xterm"
+        ) {
+            issues.push(ValidationIssue::InvalidChoice {
+                field: "terminal.preferred_backend",
+                value: cfg.terminal.preferred_backend.clone(),
+                allowed: "gnome-terminal or xterm",
+            });
+        }
         for (field, value) in [
             (
                 "launch.maximum_concurrent_jobs",
@@ -108,12 +156,21 @@ pub fn validate_effective(cfg: &EffectiveConfig) -> Vec<ValidationIssue> {
                 "launch.maximum_pending_launches",
                 cfg.launch.maximum_pending_launches,
             ),
+            (
+                "launch.preview_lifetime_seconds",
+                cfg.launch.preview_lifetime_seconds,
+            ),
         ] {
-            if value == 0 || value > 100 {
+            let maximum = if field == "launch.preview_lifetime_seconds" {
+                600
+            } else {
+                100
+            };
+            if value == 0 || value > maximum {
                 issues.push(ValidationIssue::InvalidLimit {
                     field,
                     value,
-                    range: "1..=100",
+                    range: if maximum == 600 { "1..=600" } else { "1..=100" },
                 });
             }
         }
@@ -165,5 +222,34 @@ mod tests {
         assert!(validate_effective(&cfg)
             .iter()
             .any(|i| matches!(i, ValidationIssue::UnknownProfile { .. })));
+    }
+
+    #[test]
+    fn launch_lifetime_is_bounded_when_launch_is_enabled() {
+        let mut cfg = EffectiveConfig::builtin();
+        cfg.launch.enabled = true;
+        cfg.launch.preview_lifetime_seconds = 601;
+        assert!(validate_effective(&cfg).iter().any(|issue| matches!(
+            issue,
+            ValidationIssue::InvalidLimit {
+                field: "launch.preview_lifetime_seconds",
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn launch_rejects_unsupported_or_unsafe_defaults() {
+        let mut cfg = EffectiveConfig::builtin();
+        cfg.launch.enabled = true;
+        cfg.launch.require_idempotency_key = false;
+        cfg.launch.default_terminal_mode = "managed".into();
+        let issues = validate_effective(&cfg);
+        assert!(issues
+            .iter()
+            .any(|issue| matches!(issue, ValidationIssue::RequiredSafetySetting { .. })));
+        assert!(issues
+            .iter()
+            .any(|issue| matches!(issue, ValidationIssue::InvalidChoice { .. })));
     }
 }

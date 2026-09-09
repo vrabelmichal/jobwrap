@@ -361,7 +361,7 @@ fn handle_cli_message(
             } else {
                 crate::terminal::TerminalState::Busy
             };
-            registry.register_terminal(crate::terminal::RegisteredTerminal {
+            match registry.register_terminal(crate::terminal::RegisteredTerminal {
                 terminal_id: t.terminal_id,
                 owner_uid: match owner {
                     Principal::LocalUnixUser { uid } => *uid,
@@ -373,8 +373,10 @@ fn handle_cli_message(
                 control_path: t.control_path,
                 registered_at: Utc::now(),
                 last_heartbeat: Utc::now(),
-            });
-            DaemonToClient::Ack
+            }) {
+                Ok(()) => DaemonToClient::Ack,
+                Err(error) => err(Code::BadRequest, &error),
+            }
         }
         ClientToDaemon::Output { .. } => err(Code::BadRequest, "output is wrapper-only"),
         ClientToDaemon::WrapperReady

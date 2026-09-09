@@ -120,6 +120,12 @@ at 4 GiB total. Probe execution is opt-in and is only environment-limited, not
 an operating-system sandbox; do not enable target-executing probes for
 untrusted clients.
 
+When launch is enabled, idempotency keys remain mandatory and only the
+`new-terminal` mode with the `gnome-terminal` or `xterm` backend is supported.
+Managed and existing-terminal launch modes fail closed. The
+`retain_completed_days` setting is reserved for future retention support;
+completed records are currently removed only with an explicit delete command.
+
 ## XDG paths
 
 ```text

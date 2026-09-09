@@ -130,7 +130,7 @@ impl Store {
     pub fn list_jobs(&self) -> Result<Vec<JobRecord>, StoreError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT record_json FROM jobs ORDER BY started_at DESC")?;
+            .prepare("SELECT record_json FROM jobs ORDER BY started_at DESC LIMIT 10000")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows {

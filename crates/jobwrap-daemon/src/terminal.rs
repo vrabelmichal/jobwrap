@@ -1,7 +1,8 @@
 //! Terminal backend abstraction and the existing-terminal registry.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -92,9 +93,84 @@ fn which(binary: &str) -> bool {
 }
 
 fn spawn_detached(mut cmd: std::process::Command) -> Result<(), String> {
-    cmd.spawn()
-        .map(|_| ())
-        .map_err(|e| format!("could not start terminal: {e}"))
+    let reaper = detached_child_reaper()?;
+    reaper.reserve()?;
+    let child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            reaper.release();
+            return Err(format!("could not start terminal: {error}"));
+        }
+    };
+    reaper.tx.try_send(child).map_err(|error| {
+        let mut child = match error {
+            mpsc::TrySendError::Full(child) | mpsc::TrySendError::Disconnected(child) => child,
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        reaper.release();
+        "terminal child-reaper capacity reached; the terminal was stopped".to_string()
+    })
+}
+
+const MAX_DETACHED_TERMINALS: usize = 128;
+
+struct DetachedChildReaper {
+    tx: mpsc::SyncSender<std::process::Child>,
+    active: Arc<AtomicUsize>,
+}
+
+impl DetachedChildReaper {
+    fn reserve(&self) -> Result<(), String> {
+        self.active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < MAX_DETACHED_TERMINALS).then_some(active + 1)
+            })
+            .map(|_| ())
+            .map_err(|_| "terminal process capacity reached".to_string())
+    }
+
+    fn release(&self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn detached_child_reaper() -> Result<&'static DetachedChildReaper, String> {
+    static REAPER: OnceLock<Result<DetachedChildReaper, String>> = OnceLock::new();
+    REAPER
+        .get_or_init(|| {
+            let (tx, rx) = mpsc::sync_channel::<std::process::Child>(MAX_DETACHED_TERMINALS);
+            let active = Arc::new(AtomicUsize::new(0));
+            let worker_active = Arc::clone(&active);
+            std::thread::Builder::new()
+                .name("jobwrap-terminal-reaper".into())
+                .spawn(move || {
+                    let mut children = Vec::new();
+                    loop {
+                        match rx.recv_timeout(Duration::from_millis(250)) {
+                            Ok(child) => children.push(child),
+                            Err(mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
+                        children.retain_mut(|child| match child.try_wait() {
+                            Ok(Some(_)) => {
+                                worker_active.fetch_sub(1, Ordering::AcqRel);
+                                false
+                            }
+                            Ok(None) => true,
+                            Err(error) => {
+                                tracing::warn!(%error, "could not reap terminal process");
+                                worker_active.fetch_sub(1, Ordering::AcqRel);
+                                false
+                            }
+                        });
+                    }
+                })
+                .map_err(|error| format!("could not start terminal child reaper: {error}"))?;
+            Ok(DetachedChildReaper { tx, active })
+        })
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 /// Resolve a backend by identifier, falling back to the configured preferred
@@ -150,15 +226,47 @@ pub struct TerminalRegistry {
 
 /// How long after the last heartbeat a terminal is considered disconnected.
 const HEARTBEAT_TTL: Duration = Duration::from_secs(90);
+const MAX_REGISTERED_TERMINALS: usize = 256;
 
 impl TerminalRegistry {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn register(&self, terminal: RegisteredTerminal) {
+    pub fn register(&self, terminal: RegisteredTerminal) -> Result<(), String> {
+        if terminal.terminal_id.is_empty()
+            || terminal.terminal_id.len() > 128
+            || terminal
+                .shell_type
+                .as_ref()
+                .is_some_and(|value| value.len() > 128)
+            || terminal
+                .working_directory
+                .as_ref()
+                .is_some_and(|value| value.len() > 4096)
+            || terminal
+                .control_path
+                .as_ref()
+                .is_some_and(|value| value.len() > 4096)
+        {
+            return Err("terminal registration metadata exceeds size limits".into());
+        }
         let mut map = self.terminals.lock().expect("terminal lock");
+        if !map.contains_key(&terminal.terminal_id) && map.len() >= MAX_REGISTERED_TERMINALS {
+            let now = Utc::now();
+            if let Some(oldest_stale) = map
+                .iter()
+                .filter(|(_, existing)| prune(existing, now).state == TerminalState::Disconnected)
+                .min_by_key(|(_, existing)| existing.last_heartbeat)
+                .map(|(id, _)| id.clone())
+            {
+                map.remove(&oldest_stale);
+            } else {
+                return Err("terminal registry capacity reached".into());
+            }
+        }
         map.insert(terminal.terminal_id.clone(), terminal);
+        Ok(())
     }
 
     #[allow(dead_code)] // wired by the Phase 9 shell hook

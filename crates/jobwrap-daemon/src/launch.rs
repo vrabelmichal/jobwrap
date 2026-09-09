@@ -23,11 +23,6 @@ pub struct PendingLaunch {
     pub expires_at: chrono::DateTime<Utc>,
 }
 
-/// How long a one-time launch capability stays valid.
-fn launch_ttl() -> chrono::Duration {
-    chrono::Duration::seconds(120)
-}
-
 /// The pending-launch store plus the launch concurrency counter.
 #[derive(Debug, Default)]
 pub struct LaunchStore {
@@ -40,11 +35,15 @@ impl LaunchStore {
         Self::default()
     }
 
-    fn put(&self, pending: PendingLaunch) {
-        self.pending
-            .lock()
-            .expect("pending lock")
-            .insert(pending.launch_id.clone(), pending);
+    fn try_put(&self, pending: PendingLaunch, maximum: u64) -> bool {
+        let mut entries = self.pending.lock().expect("pending lock");
+        let now = Utc::now();
+        entries.retain(|_, entry| entry.expires_at > now);
+        if entries.len() as u64 >= maximum {
+            return false;
+        }
+        entries.insert(pending.launch_id.clone(), pending);
+        true
     }
 
     fn cancel(&self, launch_id: &str) {
@@ -62,10 +61,6 @@ impl LaunchStore {
             return None;
         }
         map.remove(launch_id)
-    }
-
-    pub fn count(&self) -> usize {
-        self.pending.lock().expect("pending lock").len()
     }
 
     pub fn inc_concurrent(&self, max: u64) -> bool {
@@ -160,15 +155,14 @@ fn launch_new_terminal(
         }
         None => registry.config.terminal.preferred_backend.clone(),
     };
+    if !matches!(backend_id.as_str(), "gnome-terminal" | "xterm") {
+        return Err(format!("unknown terminal backend `{backend_id}`"));
+    }
     let backend = resolve_backend(&backend_id);
     if !backend.available() {
         return Err(format!(
             "the configured terminal backend `{backend_id}` is unavailable; no process was started"
         ));
-    }
-
-    if registry.launch_store.count() as u64 >= registry.config.launch.maximum_pending_launches {
-        return Err("too many pending launches".into());
     }
 
     let helper_binary =
@@ -178,9 +172,19 @@ fn launch_new_terminal(
         launch_id: launch_id.to_string(),
         job_id,
         request: req.clone(),
-        expires_at: Utc::now() + launch_ttl(),
+        expires_at: Utc::now()
+            + chrono::Duration::seconds(
+                i64::try_from(registry.config.launch.preview_lifetime_seconds)
+                    .unwrap_or(300)
+                    .clamp(1, 600),
+            ),
     };
-    registry.launch_store.put(pending);
+    if !registry
+        .launch_store
+        .try_put(pending, registry.config.launch.maximum_pending_launches)
+    {
+        return Err("too many pending launches".into());
+    }
     if let Err(error) = backend.launch(&HelperCommand {
         launch_id: launch_id.to_string(),
         helper_binary,
@@ -213,6 +217,6 @@ pub fn list_terminals(
 }
 
 /// Register a terminal (used by the cooperative shell hook).
-pub fn register_terminal(registry: &Registry, terminal: RegisteredTerminal) {
-    registry.terminals.register(terminal);
+pub fn register_terminal(registry: &Registry, terminal: RegisteredTerminal) -> Result<(), String> {
+    registry.terminals.register(terminal)
 }

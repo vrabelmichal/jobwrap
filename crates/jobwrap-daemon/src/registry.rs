@@ -121,6 +121,7 @@ impl Registry {
         register: jobwrap_protocol::RegisterJob,
         wrapper_tx: mpsc::Sender<ToWrapper>,
     ) -> Result<RegisterResult, String> {
+        validate_registration(&register)?;
         let id = register.id;
         let profile = self
             .config
@@ -158,6 +159,18 @@ impl Registry {
         let mut jobs = self.jobs.lock().expect("jobs lock");
         if jobs.contains_key(&id) {
             return Err("job already registered".to_string());
+        }
+        if jobs.len() >= 10_000 {
+            let oldest_finished = jobs
+                .iter()
+                .filter(|(_, job)| job.record.state.is_finished())
+                .min_by_key(|(_, job)| job.record.started_at)
+                .map(|(id, _)| *id);
+            if let Some(oldest) = oldest_finished {
+                jobs.remove(&oldest);
+            } else {
+                return Err("live job registry capacity reached".to_string());
+            }
         }
 
         {
@@ -218,10 +231,9 @@ impl Registry {
 
     /// Launch a process via the API, web, or CLI.
     ///
-    /// All modes funnel through [`crate::launch::execute`]. Managed processes
-    /// are spawned directly; new-terminal launches create a one-time launch
-    /// capability for the `jobwrap attach-launch` helper; existing-terminal
-    /// launches deliver through a registered cooperative control channel.
+    /// All modes funnel through [`crate::launch::execute`]. New-terminal
+    /// launches create a one-time launch capability for the `jobwrap
+    /// attach-launch` helper. Other modes currently fail closed.
     pub fn launch(
         &self,
         principal: &Principal,
@@ -236,6 +248,7 @@ impl Registry {
                     .into(),
             );
         }
+        validate_launch_request(self, req)?;
         let idempotency_key = &req.idempotency_key;
         if idempotency_key.is_empty() || idempotency_key.len() > 128 {
             return Err("idempotency key must contain 1 to 128 characters".into());
@@ -310,8 +323,8 @@ impl Registry {
         crate::launch::list_terminals(self, principal)
     }
 
-    pub fn register_terminal(&self, terminal: RegisteredTerminal) {
-        crate::launch::register_terminal(self, terminal);
+    pub fn register_terminal(&self, terminal: RegisteredTerminal) -> Result<(), String> {
+        crate::launch::register_terminal(self, terminal)
     }
 
     // ---- documentation ----
@@ -753,6 +766,84 @@ impl Registry {
     pub fn auth(&self) -> AuthOps<'_> {
         AuthOps { registry: self }
     }
+}
+
+fn validate_registration(register: &jobwrap_protocol::RegisterJob) -> Result<(), String> {
+    if register.wrapper_pid <= 0
+        || register.child_pid <= 0
+        || register.process_group_id <= 0
+        || register.session_id <= 0
+    {
+        return Err("registration contains an invalid process id".into());
+    }
+    if register.command.len() > 64 * 1024
+        || register.executable.len() > 4096
+        || register.working_directory.len() > 4096
+        || register.profile_name.len() > 128
+        || register.executable.contains('\0')
+        || register.working_directory.contains('\0')
+        || register
+            .terminal_device
+            .as_ref()
+            .is_some_and(|device| device.len() > 4096 || device.contains('\0'))
+    {
+        return Err("registration metadata exceeds size limits".into());
+    }
+    if register.arguments.len() > 4096
+        || register
+            .arguments
+            .iter()
+            .try_fold(0usize, |total, argument| total.checked_add(argument.len()))
+            .map_or(true, |total| total > 256 * 1024)
+        || register
+            .arguments
+            .iter()
+            .any(|argument| argument.contains('\0'))
+    {
+        return Err("registration arguments exceed size limits".into());
+    }
+    Ok(())
+}
+
+fn validate_launch_request(
+    registry: &Registry,
+    request: &jobwrap_protocol::LaunchRequest,
+) -> Result<(), String> {
+    if request.executable.is_empty()
+        || request.executable.len() > 4096
+        || request.executable.contains('\0')
+    {
+        return Err("executable must contain 1 to 4096 non-NUL bytes".into());
+    }
+    if request.arguments.len() > 4096
+        || request
+            .arguments
+            .iter()
+            .try_fold(0usize, |total, argument| total.checked_add(argument.len()))
+            .map_or(true, |total| total > 256 * 1024)
+        || request
+            .arguments
+            .iter()
+            .any(|argument| argument.contains('\0'))
+    {
+        return Err("launch arguments exceed size limits or contain NUL".into());
+    }
+    if let Some(name) = &request.display_name {
+        jobwrap_core::JobName::new(name.clone()).map_err(|error| error.to_string())?;
+    }
+    let profile = request
+        .profile_name
+        .as_deref()
+        .unwrap_or(&registry.config.launch.default_profile);
+    if !registry.config.profiles.contains_key(profile) {
+        return Err(format!("unknown profile `{profile}`"));
+    }
+    if let Some(directory) = &request.working_directory {
+        if directory.len() > 4096 || !std::path::Path::new(directory).is_dir() {
+            return Err("working directory does not exist or exceeds 4096 bytes".into());
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn check_authorized(
