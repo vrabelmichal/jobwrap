@@ -81,6 +81,87 @@ impl JobService for DaemonService {
         self.registry.delete_job(principal, id)
     }
 
+    fn launch(
+        &self,
+        principal: &Principal,
+        req: jobwrap_protocol::LaunchRequest,
+    ) -> Result<(String, JobId), ApiError> {
+        self.registry
+            .launch(principal, &req)
+            .map_err(|e| ApiError::new(jobwrap_protocol::ApiErrorCode::PermissionDenied, e))
+    }
+
+    fn identify_target(
+        &self,
+        principal: &Principal,
+        target: &str,
+    ) -> Result<jobwrap_protocol::TargetInfo, ApiError> {
+        self.registry
+            .identify_target(principal, target)
+            .map_err(ApiError::permission_denied)
+    }
+
+    fn search_man_pages(
+        &self,
+        principal: &Principal,
+        target: &str,
+    ) -> Result<Vec<jobwrap_protocol::ManPageMatch>, ApiError> {
+        self.registry
+            .search_man_pages(principal, target)
+            .map_err(ApiError::permission_denied)
+    }
+
+    fn fetch_man_page(
+        &self,
+        principal: &Principal,
+        name: &str,
+        section: Option<String>,
+    ) -> Result<Option<jobwrap_protocol::ManPage>, ApiError> {
+        self.registry
+            .fetch_man_page(principal, name, section)
+            .map_err(ApiError::permission_denied)
+    }
+
+    fn preview_help_probe(
+        &self,
+        principal: &Principal,
+        req: jobwrap_protocol::HelpProbeRequest,
+    ) -> Result<jobwrap_protocol::ProbePreview, ApiError> {
+        self.registry
+            .preview_help_probe(principal, &req)
+            .map_err(ApiError::permission_denied)
+    }
+
+    fn execute_help_probe(
+        &self,
+        principal: &Principal,
+        preview_id: &str,
+    ) -> Result<jobwrap_protocol::HelpProbeResult, ApiError> {
+        self.registry
+            .execute_help_probe(principal, preview_id)
+            .map_err(ApiError::permission_denied)
+    }
+
+    fn get_help_probe(
+        &self,
+        principal: &Principal,
+        probe_id: &str,
+    ) -> Result<Option<jobwrap_protocol::HelpProbeResult>, ApiError> {
+        self.registry
+            .get_help_probe(principal, probe_id)
+            .map_err(ApiError::permission_denied)
+    }
+
+    fn delete_help_probe(&self, principal: &Principal, probe_id: &str) -> Result<bool, ApiError> {
+        self.registry
+            .delete_help_probe(principal, probe_id)
+            .map_err(ApiError::permission_denied)
+    }
+
+    fn list_terminals(&self, principal: &Principal) -> Vec<jobwrap_protocol::TerminalInfo> {
+        self.registry.list_terminals(principal)
+    }
+
     fn broadcast(&self) -> broadcast::Sender<ServerEvent> {
         self.registry.broadcast()
     }

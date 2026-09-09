@@ -13,6 +13,7 @@ use crate::service::JobService;
 #[derive(Clone)]
 pub struct RouterState {
     pub service: Arc<dyn JobService>,
+    pub websocket_limit: Arc<tokio::sync::Semaphore>,
 }
 
 impl std::fmt::Debug for RouterState {
@@ -26,7 +27,10 @@ pub const MAX_BODY_BYTES: usize = 256 * 1024;
 
 /// Build the complete application router.
 pub fn build_router(service: Arc<dyn JobService>) -> Router {
-    let state = RouterState { service };
+    let state = RouterState {
+        service,
+        websocket_limit: Arc::new(tokio::sync::Semaphore::new(128)),
+    };
 
     Router::new()
         .route("/", get(handlers::index))
@@ -53,6 +57,34 @@ pub fn build_router(service: Arc<dyn JobService>) -> Router {
         )
         .route("/api/v1/jobs/:id/input", post(handlers::send_input))
         .route("/api/v1/jobs/:id/ws", get(handlers::job_ws))
+        .route("/api/v1/launch", post(handlers::launch_job))
+        // Documentation and help probes.
+        .route(
+            "/api/v1/documentation/identify",
+            post(handlers::identify_target),
+        )
+        .route(
+            "/api/v1/documentation/man-pages/search",
+            post(handlers::search_man_pages),
+        )
+        .route(
+            "/api/v1/documentation/man-pages/:name/:section",
+            get(handlers::fetch_man_page),
+        )
+        .route(
+            "/api/v1/documentation/help-probes/previews",
+            post(handlers::preview_help_probe),
+        )
+        .route(
+            "/api/v1/documentation/help-probes/:id/execute",
+            post(handlers::execute_help_probe),
+        )
+        .route(
+            "/api/v1/documentation/help-probes/:id",
+            get(handlers::get_help_probe).delete(handlers::delete_help_probe),
+        )
+        // Terminals.
+        .route("/api/v1/terminals", get(handlers::list_terminals))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }

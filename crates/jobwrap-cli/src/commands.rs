@@ -7,7 +7,7 @@ use jobwrap_config::EffectiveConfig;
 use jobwrap_protocol::{ClientToDaemon, DaemonToClient};
 
 use crate::cli::{
-    AuthCommand, Command, ConfigCommand, DaemonCommand, TokenCommand, TokenCreateArgs,
+    AuthCommand, Command, ConfigCommand, DaemonCommand, LaunchArgs, TokenCommand, TokenCreateArgs,
 };
 use crate::daemon::DaemonClient;
 use crate::wrap::run;
@@ -30,6 +30,10 @@ pub fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Config { action } => config(action),
         Command::Auth { action } => auth(action),
         Command::Token { action } => token(action),
+        Command::Launch(args) => launch(args),
+        Command::AttachLaunch { launch_id } => attach_launch(&launch_id),
+        Command::Inspect { target } => inspect(&target),
+        Command::Terminals => terminals(),
     }
 }
 
@@ -44,10 +48,12 @@ fn with_client<T>(f: impl FnOnce(&mut DaemonClient) -> anyhow::Result<T>) -> any
 fn load_effective() -> anyhow::Result<EffectiveConfig> {
     match jobwrap_config::load_user_config() {
         Ok(cfg) => Ok(cfg),
-        Err(e) => {
-            tracing::warn!(error = %e, "no valid configuration; using built-in defaults");
+        Err(jobwrap_config::ConfigError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
             Ok(jobwrap_config::builtin_defaults())
         }
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -72,6 +78,15 @@ fn tag(msg: &DaemonToClient) -> &'static str {
         DaemonToClient::TokenCreated { .. } => "token_created",
         DaemonToClient::TokenList { .. } => "token_list",
         DaemonToClient::TokenRevoked { .. } => "token_revoked",
+        DaemonToClient::Launched { .. } => "launched",
+        DaemonToClient::PendingLaunch { .. } => "pending_launch",
+        DaemonToClient::TargetInfo { .. } => "target_info",
+        DaemonToClient::ManPageSearch { .. } => "man_page_search",
+        DaemonToClient::ManPage { .. } => "man_page",
+        DaemonToClient::ProbePreview { .. } => "probe_preview",
+        DaemonToClient::ProbeResult { .. } => "probe_result",
+        DaemonToClient::ProbeDeleted { .. } => "probe_deleted",
+        DaemonToClient::TerminalList { .. } => "terminal_list",
         DaemonToClient::ToWrapper(_) => "to_wrapper",
     }
 }
@@ -171,15 +186,13 @@ fn send_signal(job: &str, signal: &str) -> anyhow::Result<()> {
 
 fn open(job: &Option<String>) -> anyhow::Result<()> {
     let config = load_effective()?;
+    let base = config.server.public_base_url.trim_end_matches('/');
     let url = match job {
         Some(job) => {
             let job_id = parse_job_id(job)?;
-            format!(
-                "http://{}:{}/jobs/{job_id}",
-                config.server.bind, config.server.port
-            )
+            format!("{base}/jobs/{job_id}")
         }
-        None => format!("http://{}:{}/", config.server.bind, config.server.port),
+        None => format!("{base}/"),
     };
     eprintln!("jobwrap: opening {url}");
     open_browser(&url)?;
@@ -215,21 +228,17 @@ fn daemon(action: DaemonCommand) -> anyhow::Result<()> {
             Ok(())
         }
         DaemonCommand::Stop => {
-            // Read the pid file and signal the daemon to terminate.
-            let pid_text = std::fs::read_to_string(&paths.daemon_pid)
-                .context("daemon is not running (no pid file)")?;
-            let pid: i32 = pid_text
-                .trim()
-                .parse()
-                .context("daemon pid file is corrupt")?;
-            // The pid may be stale; signaling a nonexistent pid simply fails.
+            // Obtain the PID from a verified live socket connection. A stale
+            // pid file must never be allowed to signal an unrelated process.
+            let client = DaemonClient::connect(&paths, false)
+                .context("daemon is not running or its socket is unavailable")?;
+            let pid = client.daemon_pid;
             nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid),
                 nix::sys::signal::Signal::SIGTERM,
             )
             .map_err(|e| anyhow!("could not signal daemon pid {pid}: {e}"))?;
-            let _ = std::fs::remove_file(&paths.daemon_socket);
-            println!("daemon stopped");
+            println!("shutdown requested for daemon pid {pid}");
             Ok(())
         }
     }
@@ -243,7 +252,7 @@ fn config(action: ConfigCommand) -> anyhow::Result<()> {
             Ok(())
         }
         ConfigCommand::Init => {
-            if paths.config_file.exists() {
+            if std::fs::symlink_metadata(&paths.config_file).is_ok() {
                 bail!("{} already exists", paths.config_file.display());
             }
             if let Some(parent) = paths.config_file.parent() {
@@ -261,10 +270,10 @@ fn config(action: ConfigCommand) -> anyhow::Result<()> {
             if issues.is_empty() {
                 println!("configuration is valid");
             } else {
-                for issue in issues {
-                    eprintln!("warning: {issue}");
+                for issue in &issues {
+                    eprintln!("error: {issue}");
                 }
-                println!("configuration is valid but has warnings");
+                bail!("configuration is unsafe and jobwrapd will refuse to start");
             }
             Ok(())
         }
@@ -290,8 +299,10 @@ fn config(action: ConfigCommand) -> anyhow::Result<()> {
             let config = load_effective()?;
             if let Some(profile) = config.profiles.get(&config.defaults.profile) {
                 if let Some(source) = profile.provenance.get(field.as_str()) {
-                    println!("access = {:?}", source);
-                    println!("source = {}.{}", config.defaults.profile, field);
+                    let access = profile_access_field(&profile.access, &field)
+                        .ok_or_else(|| anyhow!("unknown access field `{field}`"))?;
+                    println!("access = {access}");
+                    println!("field  = profiles.{}.{}", config.defaults.profile, field);
                     println!("layer  = {}", source.layer.label());
                     println!("file   = {}", source.path);
                     return Ok(());
@@ -300,6 +311,28 @@ fn config(action: ConfigCommand) -> anyhow::Result<()> {
             bail!("no provenance found for field `{field}`")
         }
     }
+}
+
+fn profile_access_field(
+    access: &jobwrap_core::ProfileAccess,
+    field: &str,
+) -> Option<jobwrap_core::AccessLevel> {
+    Some(match field {
+        "status" => access.status,
+        "output" => access.output,
+        "command" => access.command,
+        "working_directory" => access.working_directory,
+        "send_input" => access.send_input,
+        "signal_interrupt" => access.signal_interrupt,
+        "signal_terminate" => access.signal_terminate,
+        "signal_stop" => access.signal_stop,
+        "signal_continue" => access.signal_continue,
+        "signal_kill" => access.signal_kill,
+        "restart" => access.restart,
+        "delete" => access.delete,
+        "launch" => access.launch,
+        _ => return None,
+    })
 }
 
 fn auth(action: AuthCommand) -> anyhow::Result<()> {
@@ -453,6 +486,146 @@ fn parse_job_id(raw: &str) -> anyhow::Result<jobwrap_core::JobId> {
         .map_err(|e: jobwrap_core::JobIdError| anyhow!("invalid job id: {e}"))
 }
 
+fn attach_launch(launch_id: &str) -> anyhow::Result<()> {
+    let code = crate::wrap::attach_launch(launch_id).context("attach-launch failed")?;
+    std::process::exit(code);
+}
+
+fn inspect(target: &str) -> anyhow::Result<()> {
+    let response = with_client(|client| {
+        Ok::<_, anyhow::Error>(client.request(ClientToDaemon::IdentifyTarget {
+            target: target.to_string(),
+        })?)
+    })?;
+    let info = match response {
+        DaemonToClient::TargetInfo { info } => info,
+        DaemonToClient::Error { message, .. } => bail!("{message}"),
+        other => bail!("unexpected daemon response: {:?}", tag(&other)),
+    };
+    println!("target:        {}", info.original_path);
+    println!("resolved:      {}", info.resolved_path);
+    println!("exists:        {}", info.exists);
+    if let Some(ft) = info.file_type {
+        println!("file type:     {ft}");
+    }
+    println!("executable:    {}", info.executable);
+    if let Some(shebang) = info.shebang {
+        println!("shebang:       {shebang}");
+    }
+    if let Some(interp) = info.interpreter {
+        println!("interpreter:   {interp}");
+    }
+    if let Some(kind) = info.target_kind {
+        println!("target kind:   {kind}");
+    }
+    if let Some(pkg) = info.package {
+        println!("package:       {pkg}");
+    }
+
+    // Man-page matches.
+    let response = with_client(|client| {
+        Ok::<_, anyhow::Error>(client.request(ClientToDaemon::SearchManPages {
+            target: target.to_string(),
+            section: None,
+        })?)
+    })?;
+    let matches = match response {
+        DaemonToClient::ManPageSearch { matches } => matches,
+        DaemonToClient::Error { message, .. } => bail!("{message}"),
+        other => bail!("unexpected daemon response: {:?}", tag(&other)),
+    };
+    if matches.is_empty() {
+        println!("man pages:     (none found)");
+    } else {
+        println!("man pages:");
+        for m in matches {
+            println!("  {} ({}) [{}]", m.name, m.section, m.relationship);
+        }
+    }
+    Ok(())
+}
+
+fn terminals() -> anyhow::Result<()> {
+    let response = with_client(|client| {
+        Ok::<_, anyhow::Error>(client.request(ClientToDaemon::ListTerminals)?)
+    })?;
+    match response {
+        DaemonToClient::TerminalList { terminals } => {
+            if terminals.is_empty() {
+                println!("no terminals registered");
+            } else {
+                println!(
+                    "{:<26}  {:<12}  {:<8}  CWD",
+                    "TERMINAL ID", "STATE", "SHELL"
+                );
+                for t in terminals {
+                    println!(
+                        "{:<26}  {:<12}  {:<8}  {}",
+                        t.terminal_id,
+                        t.state,
+                        t.shell_type.unwrap_or_else(|| "-".into()),
+                        t.working_directory.unwrap_or_else(|| "-".into())
+                    );
+                }
+            }
+            Ok(())
+        }
+        DaemonToClient::Error { message, .. } => bail!("{message}"),
+        other => bail!("unexpected daemon response: {:?}", tag(&other)),
+    }
+}
+
+fn launch(args: LaunchArgs) -> anyhow::Result<()> {
+    let config = load_effective()?;
+    let key = args.idempotency_key.clone().unwrap_or_else(|| {
+        jobwrap_core::JobId::generate()
+            .map(|id| id.to_string())
+            .unwrap_or_default()
+    });
+    let terminal_mode = args
+        .terminal
+        .as_deref()
+        .unwrap_or(&config.launch.default_terminal_mode);
+    let terminal_target = match terminal_mode {
+        "managed" => jobwrap_core::TerminalTarget::Managed,
+        "new-terminal" | "new_terminal" => {
+            jobwrap_core::TerminalTarget::NewTerminal { backend: None }
+        }
+        "existing-terminal" | "existing_terminal" => {
+            let terminal_id = args
+                .terminal_id
+                .clone()
+                .ok_or_else(|| anyhow!("--terminal-id is required for existing_terminal mode"))?;
+            jobwrap_core::TerminalTarget::ExistingTerminal { terminal_id }
+        }
+        other => bail!("unknown terminal mode `{other}` (expected managed, new-terminal, or existing-terminal)"),
+    };
+    let response = with_client(|client| {
+        Ok::<_, anyhow::Error>(client.request(ClientToDaemon::LaunchJob(
+            jobwrap_protocol::LaunchRequest {
+                executable: args.executable.clone(),
+                arguments: args.arguments.clone(),
+                working_directory: args.working_directory.clone(),
+                display_name: args.name.clone(),
+                profile_name: args.profile.clone(),
+                idempotency_key: key,
+                terminal_target,
+            },
+        ))?)
+    })?;
+    match response {
+        DaemonToClient::Launched { launch_id, job_id } => {
+            println!("launch_id: {launch_id}");
+            println!("job_id: {job_id}");
+            println!("state: pending terminal startup");
+            eprintln!("jobwrap: use `jobwrap show {job_id}` for details");
+            Ok(())
+        }
+        DaemonToClient::Error { message, .. } => bail!("{message}"),
+        other => bail!("unexpected daemon response: {:?}", tag(&other)),
+    }
+}
+
 /// Default configuration written by `jobwrap config init`.
 pub const DEFAULT_CONFIG: &str = r#"# jobwrap configuration (config_version 1)
 config_version = 1
@@ -483,6 +656,28 @@ browser_session_minutes = 720
 password_attempt_limit = 5
 password_attempt_window_seconds = 60
 
+# Daemon/API process creation is experimental and disabled by default. Normal
+# `jobwrap COMMAND` wrapping is unaffected.
+[launch]
+enabled = false
+default_profile = "standard"
+default_terminal_mode = "new-terminal"
+require_preview = true
+require_idempotency_key = true
+maximum_concurrent_jobs = 20
+maximum_pending_launches = 20
+preview_lifetime_seconds = 300
+
+[help]
+assume_help_available = false
+prefer_man_pages = true
+allow_interpreter_probes = false
+allow_script_probes = false
+default_probe_argument = "--help"
+probe_timeout_seconds = 3
+probe_output_limit_bytes = 1048576
+cache_results = true
+
 # The standard profile is public: anyone on the local network can watch
 # output. Public output may itself contain secrets; choose the private
 # profile with --profile private for sensitive work.
@@ -499,6 +694,7 @@ signal_continue = "controller"
 signal_kill = "owner"
 restart = "owner"
 delete = "owner"
+launch = "owner"
 
 [profiles.private]
 status = "authenticated"
@@ -513,4 +709,5 @@ signal_continue = "owner"
 signal_kill = "owner"
 restart = "owner"
 delete = "owner"
+launch = "owner"
 "#;

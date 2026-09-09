@@ -11,7 +11,11 @@ function b64decode(b64) {
 
 function appendBytes(node, bytes) {
   const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-  node.textContent += text;
+  const maxTerminalChars = 2 * 1024 * 1024;
+  const combined = node.textContent + text;
+  node.textContent = combined.length > maxTerminalChars
+    ? combined.slice(combined.length - maxTerminalChars)
+    : combined;
   node.scrollTop = node.scrollHeight;
 }
 
@@ -39,11 +43,18 @@ function renderJobList() {
     '<th>name</th><th>state</th><th>profile</th><th>started</th></tr></thead><tbody>';
   for (const job of jobs) {
     html += `<tr><td><a href="/jobs/${job.id}">${escapeHtml(job.display_name)}</a></td>` +
-      `<td>${escapeHtml(job.state)}</td><td>${escapeHtml(job.profile_name)}</td>` +
+      `<td>${escapeHtml(formatState(job.state))}</td><td>${escapeHtml(job.profile_name)}</td>` +
       `<td>${escapeHtml(job.started_at || '')}</td></tr>`;
   }
   html += '</tbody></table>';
   container.innerHTML = html;
+}
+
+function formatState(state) {
+  if (!state || typeof state === 'string') return state || 'unknown';
+  if (state.type === 'exited') return `exited (${state.code})`;
+  if (state.type === 'signaled') return `signaled (${state.signal})`;
+  return state.type || 'unknown';
 }
 
 function escapeHtml(s) {
@@ -79,7 +90,7 @@ function connectTerminal() {
       const bytes = b64decode(msg.data_base64);
       appendBytes(terminal, bytes);
     } else if (msg.type === 'state_changed' && stateEl) {
-      stateEl.textContent = msg.state.type;
+      stateEl.textContent = formatState(msg.state);
     }
   };
 

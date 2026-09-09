@@ -123,3 +123,145 @@ pub struct LiveOutput {
     pub sequence: u64,
     pub data_base64: String,
 }
+
+// ---- Documentation and help-probe types ----
+
+/// Static metadata about a target file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TargetInfo {
+    pub original_path: String,
+    pub resolved_path: String,
+    pub exists: bool,
+    pub file_type: Option<String>,
+    pub executable: bool,
+    pub shebang: Option<String>,
+    pub interpreter: Option<String>,
+    pub interpreter_prefix_arguments: Vec<String>,
+    pub target_kind: Option<String>,
+    pub mtime_nanos: Option<i64>,
+    pub fingerprint: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub package: Option<String>,
+}
+
+/// A man-page match.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManPageMatch {
+    pub name: String,
+    pub section: String,
+    pub relationship: String,
+    pub content_available: bool,
+}
+
+/// A man page with formatted content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManPage {
+    pub name: String,
+    pub section: String,
+    pub content: Option<String>,
+}
+
+/// Which kind of help probe is being requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HelpProbeKind {
+    Interpreter,
+    Executable,
+    Script,
+    Custom,
+}
+
+/// A request to preview a help probe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelpProbeRequest {
+    pub target: String,
+    pub probe_argument: Option<String>,
+    pub kind: HelpProbeKind,
+    pub idempotency_key: String,
+}
+
+/// The exact invocation a probe would run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeInvocation {
+    pub executable: String,
+    pub arguments: Vec<String>,
+}
+
+/// A help-probe preview.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbePreview {
+    pub preview_id: String,
+    pub invocation: ProbeInvocation,
+    pub executes_target: bool,
+    pub help_support_known: bool,
+    pub warning: String,
+}
+
+/// Classification of a probe result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeClassification {
+    LikelyHelpOutput,
+    PossibleHelpOutput,
+    ArgumentRejected,
+    NoOutput,
+    NormalProgramBehaviorSuspected,
+    TimedOut,
+    SideEffectsObserved,
+    ExecutionFailed,
+    Unknown,
+}
+
+impl std::fmt::Display for ProbeClassification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ProbeClassification::LikelyHelpOutput => "likely_help_output",
+            ProbeClassification::PossibleHelpOutput => "possible_help_output",
+            ProbeClassification::ArgumentRejected => "argument_rejected",
+            ProbeClassification::NoOutput => "no_output",
+            ProbeClassification::NormalProgramBehaviorSuspected => "normal_behavior_suspected",
+            ProbeClassification::TimedOut => "timed_out",
+            ProbeClassification::SideEffectsObserved => "side_effects_observed",
+            ProbeClassification::ExecutionFailed => "execution_failed",
+            ProbeClassification::Unknown => "unknown",
+        })
+    }
+}
+
+/// A completed help probe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelpProbeResult {
+    pub probe_id: String,
+    pub invocation: ProbeInvocation,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub output_truncated: bool,
+    pub stdout: String,
+    pub stderr: String,
+    pub classification: ProbeClassification,
+    pub sandbox_level: String,
+    pub warning: String,
+}
+
+/// The protection level of the probe sandbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxStatus {
+    pub level: String,
+    pub network_isolated: bool,
+    pub filesystem_isolated: bool,
+    pub environment_filtered: bool,
+}
+
+/// A registered terminal that can accept a cooperative launch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalInfo {
+    pub terminal_id: String,
+    pub owner_uid: u32,
+    pub state: String,
+    pub shell_type: Option<String>,
+    pub working_directory: Option<String>,
+    pub registered_at: DateTime<Utc>,
+    pub last_heartbeat: DateTime<Utc>,
+}

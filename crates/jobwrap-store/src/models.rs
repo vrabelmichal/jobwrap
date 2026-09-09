@@ -25,7 +25,9 @@ pub fn parse_scope(raw: &str) -> Option<TokenScope> {
     }
     let parts: Vec<&str> = raw.split(':').collect();
     let valid = match parts.as_slice() {
-        ["jobs", "list"] | ["jobs", "status"] | ["jobs", "output"] => true,
+        ["jobs", "list"] | ["jobs", "status"] | ["jobs", "output"] | ["jobs", "launch"] => true,
+        ["jobs", "launch", "new-terminal"] => true,
+        ["jobs", "launch", "existing-terminal"] => true,
         ["job", "*", "status"] | ["job", "*", "output"] | ["job", "*", "input"] => true,
         ["job", id, "status"] | ["job", id, "output"] | ["job", id, "input"] => {
             id.parse::<JobId>().is_ok()
@@ -33,6 +35,13 @@ pub fn parse_scope(raw: &str) -> Option<TokenScope> {
         ["job", "*", "signal", sig] => matches!(*sig, "int" | "term" | "stop" | "cont" | "kill"),
         ["job", id, "signal", sig] => {
             id.parse::<JobId>().is_ok() && matches!(*sig, "int" | "term" | "stop" | "cont" | "kill")
+        }
+        ["docs", kind, action]
+            if matches!(*kind, "identify" | "man")
+                || matches!(*kind, "probe")
+                    && matches!(*action, "interpreter" | "executable" | "script") =>
+        {
+            true
         }
         ["server", "status"] => true,
         _ => false,

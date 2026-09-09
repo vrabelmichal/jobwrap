@@ -55,11 +55,16 @@ docs/                    architecture, security model, API, configuration
 See `docs/security-model.md`. Highlights:
 
 * the HTTP server binds to loopback by default;
-* the daemon never creates arbitrary processes;
+* daemon/API process creation and executable help probes are disabled by default;
 * wrapped commands are never run through an implicit shell;
 * only named signals are exposed;
 * passwords and tokens are stored hashed;
-* every authorization decision goes through one function.
+* log growth, protocol frames, WebSockets, and daemon socket connections are bounded.
+
+The supported process path is `jobwrap COMMAND`. The experimental `jobwrap
+launch` API is opt-in; managed and existing-terminal modes deliberately fail
+closed until their lifecycle/control integrations are complete. See
+`docs/security-model.md` and `AUDIT_REPORT.md`.
 
 ## Development
 

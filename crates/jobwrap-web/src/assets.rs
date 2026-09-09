@@ -14,6 +14,7 @@ pub fn index_page(jobs_json: &str, authenticated: bool) -> String {
     } else {
         r#"<a href="/login" class="login-link">log in</a>"#
     };
+    let jobs_json = html_attribute_escape(jobs_json);
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -36,6 +37,8 @@ pub fn index_page(jobs_json: &str, authenticated: bool) -> String {
 }
 
 pub fn job_page(record: &JobRecord) -> String {
+    let display_name = html_escape(record.display_name.as_str());
+    let state = html_escape(&record.state.describe());
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -46,7 +49,7 @@ pub fn job_page(record: &JobRecord) -> String {
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header><a href="/" class="back-link">&larr; jobs</a><h1>{}</h1><span id="job-state" class="state"></span></header>
+<header><a href="/" class="back-link">&larr; jobs</a><h1>{}</h1><span id="job-state" class="state">{}</span></header>
 <main>
 <pre id="terminal" class="terminal" data-job="{}"></pre>
 <div id="connection" class="connection"></div>
@@ -61,7 +64,7 @@ pub fn job_page(record: &JobRecord) -> String {
 <script src="/static/app.js"></script>
 </body>
 </html>"#,
-        record.display_name, record.display_name, record.id
+        display_name, display_name, state, record.id
     )
 }
 
@@ -103,6 +106,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 }
 
 pub fn not_found_page(id: &str) -> String {
+    let id = html_escape(id);
     format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><title>not found</title>
 <link rel="stylesheet" href="/static/app.css"></head><body><main><h1>job not found</h1>
@@ -124,4 +128,20 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+fn html_attribute_escape(s: &str) -> String {
+    html_escape(s).replace('\'', "&#39;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_json_cannot_escape_its_attribute() {
+        let page = index_page(r#"[{"display_name":"' onmouseover='alert(1)"}]"#, false);
+        assert!(!page.contains("data-jobs='[{\"display_name\":\"' onmouseover="));
+        assert!(page.contains("&#39; onmouseover=&#39;"));
+    }
 }

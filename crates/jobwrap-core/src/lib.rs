@@ -17,18 +17,21 @@ mod error;
 mod event;
 mod job;
 mod job_id;
+mod launch;
 mod process;
 mod signal;
 mod state;
 
 pub use access::{
-    authorize, AccessLevel, AccessPolicy, AuthorizationDecision, Permission, Principal,
-    ProfileAccess, RequiredAccess, ResourceSelector, TokenGrant,
+    authorize, authorize_global, AccessLevel, AccessPolicy, AuthorizationDecision,
+    GlobalPermission, Permission, Principal, ProfileAccess, RequiredAccess, ResourceSelector,
+    TokenGrant,
 };
 pub use error::CoreError;
 pub use event::{Event, EventId, EventKind};
 pub use job::{CommandDisplay, JobName, JobRecord};
 pub use job_id::{JobId, JobIdError, ULID_EPOCH};
+pub use launch::{LaunchMode, TerminalTarget};
 pub use process::{ProcessGroupId, ProcessId, SessionId, TerminalMetadata, WindowSize};
 pub use signal::{Signal, SignalParseError};
 pub use state::{JobState, StateTransitionError};

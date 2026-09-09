@@ -41,8 +41,8 @@ document.
 ### Network
 
 * the HTTP server binds to loopback (`127.0.0.1` and `[::1]`) by default;
-* binding to a non-loopback address requires an explicit
-  `allow_remote_bind = true` and is flagged by validation;
+* the daemon refuses non-loopback binds, including when the legacy
+  `allow_remote_bind` field is true;
 * remote access is intended through `ssh -L` or a TLS-terminating reverse
   proxy, not through a plaintext internet listener;
 * no custom cryptography is implemented.
@@ -83,18 +83,29 @@ document.
 * password attempts are rate limited;
 * request bodies are size limited;
 * WebSocket connections are authorized before upgrade;
-* WebSocket origin checks and CSRF protection reject cross-site requests;
+* state-changing HTTP requests require an exact same-origin match when an
+  Origin header is present;
 * output is bounded per job (`maximum_log_bytes`) and recording stops rather
-  than terminating the process when the limit is reached.
+  than terminating the process when the limit is reached;
+* aggregate logs are capped at 4 GiB; daemon socket connections, live
+  WebSockets, wrapper output queues, sessions, probe records, and probe
+  subprocesses have fixed bounds.
 
 ### Process safety
 
-* the web server never creates arbitrary processes in the initial release;
+* daemon/API process creation is disabled by default;
+* managed and existing-terminal daemon launches fail closed; only the opt-in
+  new-terminal helper path is implemented;
 * wrapped commands are executed directly
   (`Command::new(executable).args(arguments)`), never via an implicit shell;
 * no arbitrary numeric signals are exposed — only named allow-listed signals;
 * environment variables are never exposed through the API;
 * every PID is treated as potentially stale or reused.
+
+Help probes are also disabled by default. When explicitly enabled they use a
+private working directory, filtered environment, closed stdin, output limits,
+a timeout, and a dedicated process group. This is not filesystem or syscall
+containment: a probed program runs with the user's Unix permissions.
 
 ## Default access recommendations
 

@@ -10,4 +10,4 @@ mod store;
 
 pub use logfile::{delete_log, total_log_bytes, LogLimits, OutputLog};
 pub use models::{parse_scope, StoredSession, StoredToken, TokenScope};
-pub use store::{Store, StoreError};
+pub use store::{HelpCacheEntry, Store, StoreError};

@@ -19,6 +19,11 @@ pub enum ValidationIssue {
     ZeroSessionMinutes,
     /// The selected profile does not exist.
     UnknownProfile { name: String },
+    InvalidLimit {
+        field: &'static str,
+        value: u64,
+        range: &'static str,
+    },
 }
 
 impl fmt::Display for ValidationIssue {
@@ -45,6 +50,13 @@ impl fmt::Display for ValidationIssue {
             ValidationIssue::UnknownProfile { name } => {
                 write!(f, "default profile `{name}` is not defined")
             }
+            ValidationIssue::InvalidLimit {
+                field,
+                value,
+                range,
+            } => {
+                write!(f, "{field} = {value} is outside the safe range {range}")
+            }
         }
     }
 }
@@ -52,10 +64,14 @@ impl fmt::Display for ValidationIssue {
 /// Return all validation issues found in the configuration.
 pub fn validate_effective(cfg: &EffectiveConfig) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
-    if !cfg.server.bind.starts_with("127.")
-        && !cfg.server.bind.starts_with("::1")
-        && cfg.server.bind != "localhost"
-    {
+    let loopback = cfg.server.bind == "localhost"
+        || cfg
+            .server
+            .bind
+            .parse::<std::net::IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false);
+    if !loopback {
         issues.push(ValidationIssue::UnsafeBind {
             bind: cfg.server.bind.clone(),
             port: cfg.server.port,
@@ -72,6 +88,53 @@ pub fn validate_effective(cfg: &EffectiveConfig) -> Vec<ValidationIssue> {
         issues.push(ValidationIssue::UnknownProfile {
             name: cfg.defaults.profile.clone(),
         });
+    }
+    if cfg.defaults.maximum_log_bytes == 0
+        || cfg.defaults.maximum_log_bytes > 4 * 1024 * 1024 * 1024
+    {
+        issues.push(ValidationIssue::InvalidLimit {
+            field: "defaults.maximum_log_bytes",
+            value: cfg.defaults.maximum_log_bytes,
+            range: "1..=4294967296",
+        });
+    }
+    if cfg.launch.enabled {
+        for (field, value) in [
+            (
+                "launch.maximum_concurrent_jobs",
+                cfg.launch.maximum_concurrent_jobs,
+            ),
+            (
+                "launch.maximum_pending_launches",
+                cfg.launch.maximum_pending_launches,
+            ),
+        ] {
+            if value == 0 || value > 100 {
+                issues.push(ValidationIssue::InvalidLimit {
+                    field,
+                    value,
+                    range: "1..=100",
+                });
+            }
+        }
+    }
+    if cfg.help.allow_interpreter_probes || cfg.help.allow_script_probes {
+        if cfg.help.probe_timeout_seconds == 0 || cfg.help.probe_timeout_seconds > 30 {
+            issues.push(ValidationIssue::InvalidLimit {
+                field: "help.probe_timeout_seconds",
+                value: cfg.help.probe_timeout_seconds,
+                range: "1..=30",
+            });
+        }
+        if cfg.help.probe_output_limit_bytes == 0
+            || cfg.help.probe_output_limit_bytes > 8 * 1024 * 1024
+        {
+            issues.push(ValidationIssue::InvalidLimit {
+                field: "help.probe_output_limit_bytes",
+                value: cfg.help.probe_output_limit_bytes,
+                range: "1..=8388608",
+            });
+        }
     }
     issues
 }

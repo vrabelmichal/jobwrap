@@ -23,6 +23,12 @@ pub struct RawConfig {
     #[serde(default)]
     pub authentication: Option<AuthenticationFile>,
     #[serde(default)]
+    pub launch: Option<LaunchFile>,
+    #[serde(default)]
+    pub terminal: Option<TerminalFile>,
+    #[serde(default)]
+    pub help: Option<HelpFile>,
+    #[serde(default)]
     pub profiles: BTreeMap<String, ProfileFile>,
 }
 
@@ -82,6 +88,57 @@ pub struct AuthenticationFile {
     pub password_attempt_window_seconds: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LaunchFile {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub default_profile: Option<String>,
+    #[serde(default)]
+    pub default_terminal_mode: Option<String>,
+    #[serde(default)]
+    pub require_preview: Option<bool>,
+    #[serde(default)]
+    pub require_idempotency_key: Option<bool>,
+    #[serde(default)]
+    pub maximum_concurrent_jobs: Option<u64>,
+    #[serde(default)]
+    pub maximum_pending_launches: Option<u64>,
+    #[serde(default)]
+    pub preview_lifetime_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalFile {
+    #[serde(default)]
+    pub preferred_backend: Option<String>,
+    #[serde(default)]
+    pub allow_api_backend_selection: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HelpFile {
+    #[serde(default)]
+    pub assume_help_available: Option<bool>,
+    #[serde(default)]
+    pub prefer_man_pages: Option<bool>,
+    #[serde(default)]
+    pub allow_interpreter_probes: Option<bool>,
+    #[serde(default)]
+    pub allow_script_probes: Option<bool>,
+    #[serde(default)]
+    pub default_probe_argument: Option<String>,
+    #[serde(default)]
+    pub probe_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub probe_output_limit_bytes: Option<u64>,
+    #[serde(default)]
+    pub cache_results: Option<bool>,
+}
+
 /// A named access profile.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -110,6 +167,8 @@ pub struct ProfileFile {
     pub restart: Option<jobwrap_core::AccessLevel>,
     #[serde(default)]
     pub delete: Option<jobwrap_core::AccessLevel>,
+    #[serde(default)]
+    pub launch: Option<jobwrap_core::AccessLevel>,
 }
 
 /// Parse raw TOML, rejecting unknown fields and unsupported versions.

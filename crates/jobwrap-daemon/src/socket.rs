@@ -4,10 +4,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use chrono::Utc;
 use jobwrap_core::Principal;
 use jobwrap_protocol::{
-    codec, error_response, ClientToDaemon, DaemonToClient, Hello, HelloRole, ToWrapper,
-    WrapperToDaemon, PROTOCOL_VERSION,
+    codec, error_response, ClientToDaemon, DaemonToClient, HelloRole, ToWrapper, WrapperToDaemon,
+    PROTOCOL_VERSION,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
@@ -23,6 +24,7 @@ pub async fn serve(
     path: PathBuf,
 ) -> std::io::Result<()> {
     let listener = UnixListener::bind(&path)?;
+    let connection_limit = Arc::new(tokio::sync::Semaphore::new(128));
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     tracing::info!(path = %path.display(), "unix socket listening");
 
@@ -36,7 +38,15 @@ pub async fn serve(
         };
         let registry = registry.clone();
         let service = service.clone();
+        let permit = match connection_limit.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                tracing::warn!("Unix socket connection limit reached");
+                continue;
+            }
+        };
         tokio::spawn(async move {
+            let _permit = permit;
             if let Err(e) = handle_connection(stream, registry, service).await {
                 tracing::debug!(error = %e, "connection closed");
             }
@@ -49,6 +59,13 @@ async fn handle_connection(
     registry: Arc<Registry>,
     service: Arc<DaemonService>,
 ) -> std::io::Result<()> {
+    use nix::sys::socket::{getsockopt, sockopt};
+    let credentials =
+        getsockopt(&stream, sockopt::PeerCredentials).map_err(std::io::Error::from)?;
+    let peer_uid = credentials.uid();
+    if peer_uid != nix::unistd::Uid::current().as_raw() {
+        return Ok(());
+    }
     // Expect a Hello first.
     let hello = match read_request(&mut stream).await {
         Some(ClientToDaemon::Hello(hello)) => hello,
@@ -63,6 +80,17 @@ async fn handle_connection(
         .await?;
         return Ok(());
     }
+    if hello.uid != peer_uid || hello.pid != credentials.pid() {
+        write_response(
+            &mut stream,
+            &error_response(
+                "identity_rejected",
+                "hello identity does not match socket peer",
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
     write_response(
         &mut stream,
         &DaemonToClient::HelloAck {
@@ -73,8 +101,8 @@ async fn handle_connection(
     .await?;
 
     match hello.role {
-        HelloRole::Wrapper => handle_wrapper(stream, registry, hello).await,
-        HelloRole::Cli => handle_cli(stream, registry, service, hello).await,
+        HelloRole::Wrapper => handle_wrapper(stream, registry, peer_uid).await,
+        HelloRole::Cli => handle_cli(stream, registry, service, peer_uid).await,
     }
 }
 
@@ -82,12 +110,37 @@ async fn handle_connection(
 async fn handle_wrapper(
     stream: UnixStream,
     registry: Arc<Registry>,
-    _hello: Hello,
+    peer_uid: u32,
 ) -> std::io::Result<()> {
     let (mut read, mut write) = stream.into_split();
-    let Some(ClientToDaemon::RegisterJob(register)) = read_request_from(&mut read).await else {
+    let first = match read_request_from(&mut read).await {
+        Some(m) => m,
+        None => return Ok(()),
+    };
+
+    // The `attach-launch` helper (started by a terminal backend) first
+    // retrieves the pending structured launch over this connection, then
+    // reconnects to register the resulting job.
+    if let ClientToDaemon::AttachLaunch { launch_id } = &first {
+        match registry.attach_launch(launch_id) {
+            Ok((request, job_id)) => {
+                write_response(
+                    &mut write,
+                    &DaemonToClient::PendingLaunch { request, job_id },
+                )
+                .await?;
+            }
+            Err(e) => {
+                write_response(&mut write, &error_response("launch_not_found", e)).await?;
+            }
+        }
+        return Ok(());
+    }
+
+    let ClientToDaemon::RegisterJob(mut register) = first else {
         return Ok(());
     };
+    register.owner_uid = peer_uid;
 
     // Build the control channel. The writer task starts after the registration
     // reply is written so replies stay ordered.
@@ -167,9 +220,9 @@ async fn handle_cli(
     mut stream: UnixStream,
     registry: Arc<Registry>,
     _service: Arc<DaemonService>,
-    hello: Hello,
+    peer_uid: u32,
 ) -> std::io::Result<()> {
-    let owner = Principal::LocalUnixUser { uid: hello.uid };
+    let owner = Principal::LocalUnixUser { uid: peer_uid };
     loop {
         let Some(request) = read_request(&mut stream).await else {
             break;
@@ -212,7 +265,9 @@ fn handle_cli_message(
             job_id,
             data_base64,
         } => {
-            let data = jobwrap_protocol::decode_input(&data_base64).unwrap_or_default();
+            let Some(data) = jobwrap_protocol::decode_input(&data_base64) else {
+                return err(Code::BadRequest, "input is not valid base64");
+            };
             match registry.send_input(owner, job_id, &data) {
                 Ok(()) => DaemonToClient::Ack,
                 Err(e) => err(e.code, &e.message),
@@ -252,6 +307,75 @@ fn handle_cli_message(
             Ok(()) => DaemonToClient::TokenRevoked { token_id },
             Err(e) => err(Code::Internal, &e),
         },
+        ClientToDaemon::LaunchJob(req) => match registry.launch(owner, &req) {
+            Ok((launch_id, job_id)) => DaemonToClient::Launched { launch_id, job_id },
+            Err(e) => err(Code::PermissionDenied, &e),
+        },
+        ClientToDaemon::AttachLaunch { launch_id } => match registry.attach_launch(&launch_id) {
+            Ok((request, job_id)) => DaemonToClient::PendingLaunch { request, job_id },
+            Err(e) => err(Code::BadRequest, &e),
+        },
+        ClientToDaemon::IdentifyTarget { target } => {
+            match registry.identify_target(owner, &target) {
+                Ok(info) => DaemonToClient::TargetInfo { info },
+                Err(e) => err(Code::PermissionDenied, &e),
+            }
+        }
+        ClientToDaemon::SearchManPages { target, section: _ } => {
+            match registry.search_man_pages(owner, &target) {
+                Ok(matches) => DaemonToClient::ManPageSearch { matches },
+                Err(e) => err(Code::PermissionDenied, &e),
+            }
+        }
+        ClientToDaemon::PreviewHelpProbe(req) => match registry.preview_help_probe(owner, &req) {
+            Ok(preview) => DaemonToClient::ProbePreview { preview },
+            Err(e) => err(Code::PermissionDenied, &e),
+        },
+        ClientToDaemon::ExecuteHelpProbe { preview_id } => {
+            match registry.execute_help_probe(owner, &preview_id) {
+                Ok(result) => DaemonToClient::ProbeResult { result },
+                Err(e) => err(Code::BadRequest, &e),
+            }
+        }
+        ClientToDaemon::GetHelpProbe { probe_id } => {
+            match registry.get_help_probe(owner, &probe_id) {
+                Ok(Some(result)) => DaemonToClient::ProbeResult { result },
+                Ok(None) => err(Code::NotFound, "probe not found"),
+                Err(e) => err(Code::PermissionDenied, &e),
+            }
+        }
+        ClientToDaemon::DeleteHelpProbe { probe_id } => {
+            match registry.delete_help_probe(owner, &probe_id) {
+                Ok(true) => DaemonToClient::ProbeDeleted { probe_id },
+                Ok(false) => err(Code::NotFound, "probe not found"),
+                Err(e) => err(Code::PermissionDenied, &e),
+            }
+        }
+        ClientToDaemon::ListTerminals => {
+            let terminals = registry.list_terminals(owner);
+            DaemonToClient::TerminalList { terminals }
+        }
+        ClientToDaemon::RegisterTerminal(t) => {
+            let state = if t.ready {
+                crate::terminal::TerminalState::Ready
+            } else {
+                crate::terminal::TerminalState::Busy
+            };
+            registry.register_terminal(crate::terminal::RegisteredTerminal {
+                terminal_id: t.terminal_id,
+                owner_uid: match owner {
+                    Principal::LocalUnixUser { uid } => *uid,
+                    _ => unreachable!("CLI socket principals are local users"),
+                },
+                state,
+                shell_type: t.shell_type,
+                working_directory: t.working_directory,
+                control_path: t.control_path,
+                registered_at: Utc::now(),
+                last_heartbeat: Utc::now(),
+            });
+            DaemonToClient::Ack
+        }
         ClientToDaemon::Output { .. } => err(Code::BadRequest, "output is wrapper-only"),
         ClientToDaemon::WrapperReady
         | ClientToDaemon::WrapperStopped

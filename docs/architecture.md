@@ -32,8 +32,10 @@ The system is two cooperating executables:
   with the daemon, and relays terminal traffic. It is the only component that
   ever creates processes.
 * **`jobwrapd`** — a per-user daemon providing the web interface, HTTP API,
-  authentication, job registry, log storage, and access control. It never
-  launches arbitrary processes in the initial release.
+  authentication, job registry, log storage, and access control. Experimental
+  launch/probe features are disabled by default; the only opt-in launch mode
+  currently available starts the fixed `jobwrap attach-launch` helper in a
+  supported terminal emulator.
 
 ## Process model
 
@@ -42,12 +44,12 @@ When invoked, `jobwrap`:
 1. parses only its own arguments (before `--` or an unrecognized first word);
 2. loads the user configuration;
 3. determines the effective profile;
-4. connects to the per-user daemon, starting it if necessary;
-5. verifies the daemon identity through the Unix socket (peer UID);
-6. allocates a new pseudo-terminal;
-7. forks and executes the command without any shell;
-8. puts the child in a dedicated process group (a new session via `setsid`);
-9. registers the job with the daemon;
+4. allocates a new pseudo-terminal;
+5. forks and executes the command without any shell;
+6. puts the child in a dedicated process group (a new session via `setsid`);
+7. connects to the per-user daemon, starting it if necessary;
+8. verifies the daemon identity through the Unix socket (peer UID);
+9. registers the job with the daemon (or continues locally if registration fails);
 10. relays data between the original terminal, the child PTY, and the daemon;
 11. forwards terminal signals (`SIGINT`, `SIGQUIT`, `SIGTERM`, `SIGHUP`,
     `SIGTSTP`, `SIGCONT`, `SIGWINCH`) to the child's process group;
@@ -127,12 +129,12 @@ provided but not required.
 Lowest to highest:
 
 ```text
-built-in defaults < user configuration < named profile
-  < trusted project configuration < environment < command-line options
+built-in defaults < user configuration
 ```
 
-Every resolved value records a `ValueSource` so `jobwrap config explain` can
-report where it came from.
+Profile access values record a `ValueSource` so `jobwrap config explain` can
+report where they came from. Project and environment layers are not currently
+implemented.
 
 ## Protocol
 

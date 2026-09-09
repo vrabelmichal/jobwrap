@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use jobwrap_config::EffectiveConfig;
 use jobwrap_core::JobId;
 use jobwrap_protocol::{
@@ -25,6 +25,9 @@ use crate::daemon::{build_env, connect_wrapper_stream};
 
 /// Run the wrapped command and return its exit status.
 pub fn run(args: WrapArgs) -> anyhow::Result<i32> {
+    if args.detach {
+        bail!("--detach is not implemented; no command was started");
+    }
     let config = load_config();
     let paths = jobwrap_config::RuntimePaths::discover().context("resolving XDG paths")?;
 
@@ -65,8 +68,13 @@ pub fn run(args: WrapArgs) -> anyhow::Result<i32> {
         arguments: arguments.clone(),
         job_name: job_name.clone(),
         profile_name: profile_name.clone(),
+        record_output: !args.no_record,
     };
-    let registration = register_with_daemon(&paths, &config, &saved, &child, identity);
+    let registration = if args.no_web {
+        Err("registration disabled by --no-web".to_string())
+    } else {
+        register_with_daemon(&paths, &config, &saved, &child, identity, None)
+    };
 
     // Print the banner.
     match &registration {
@@ -80,6 +88,10 @@ pub fn run(args: WrapArgs) -> anyhow::Result<i32> {
                 );
             }
             eprintln!("jobwrap: control remains available from this terminal");
+        }
+        Err(reason) if args.no_web => {
+            eprintln!("jobwrap: web monitoring disabled by --no-web");
+            let _ = reason;
         }
         Err(reason) => {
             eprintln!("jobwrap: warning: could not register with jobwrapd: {reason}");
@@ -109,6 +121,117 @@ pub fn run(args: WrapArgs) -> anyhow::Result<i32> {
 
     eprintln!("jobwrap: {}", status_display(status));
     Ok(status.exit_code())
+}
+
+/// The `attach-launch` helper mode. Started inside a new terminal by the
+/// daemon's terminal backend; retrieves the pending structured launch and
+/// runs it under a PTY, registering the preassigned job id.
+pub fn attach_launch(launch_id: &str) -> anyhow::Result<i32> {
+    let config = load_config();
+    let paths = jobwrap_config::RuntimePaths::discover().context("resolving XDG paths")?;
+
+    // Fetch the pending launch from the daemon.
+    let (mut read, mut write, _daemon_pid) =
+        connect_wrapper_stream(&paths, config.daemon.auto_start)
+            .map_err(|e| anyhow::anyhow!("could not connect to jobwrapd: {e}"))?;
+    write
+        .write_all(&codec::encode_frame(&ClientToDaemon::AttachLaunch {
+            launch_id: launch_id.to_string(),
+        })?)
+        .context("sending attach-launch request")?;
+    let reply = codec::read_frame(&mut read).context("reading attach-launch response")?;
+    let (request, job_id) = match reply {
+        DaemonToClient::PendingLaunch { request, job_id } => (request, job_id),
+        DaemonToClient::Error { message, .. } => {
+            bail!("the daemon refused this launch: {message}")
+        }
+        other => bail!("unexpected daemon response: {:?}", tag(&other)),
+    };
+    drop(read);
+    drop(write);
+
+    let saved = SavedTerminal::capture(0);
+    let _guard = TerminalGuard::new(&saved);
+    let mut pty = PseudoTerminal::allocate().context("allocating pseudo-terminal")?;
+    pty.initialize_slave(Some(&saved))
+        .context("initializing the pty slave")?;
+
+    let executable = std::ffi::OsString::from(&request.executable);
+    let arguments: Vec<std::ffi::OsString> = request
+        .arguments
+        .iter()
+        .map(std::ffi::OsString::from)
+        .collect();
+    let executable_path = PathBuf::from(&executable);
+    let child = child::spawn(
+        &mut pty,
+        saved.window_size,
+        &executable_path,
+        &arguments,
+        &[],
+    )
+    .with_context(|| format!("spawning {}", executable_path.display()))?;
+
+    let profile_name = request
+        .profile_name
+        .clone()
+        .unwrap_or_else(|| config.defaults.profile.clone());
+    let job_name = request
+        .display_name
+        .clone()
+        .unwrap_or_else(|| default_name(&request.executable, &config));
+    let identity = JobIdentity {
+        executable,
+        arguments,
+        job_name,
+        profile_name,
+        record_output: true,
+    };
+    let registration =
+        register_with_daemon(&paths, &config, &saved, &child, identity, Some(job_id));
+
+    let (cmd_tx, cmd_rx) = command_channel();
+    let (sinks, final_tx) = match registration {
+        Ok(link) => build_sinks(link, cmd_tx),
+        Err(reason) => {
+            eprintln!("jobwrap: warning: could not register: {reason}");
+            eprintln!("jobwrap: the command is still running attached to this terminal");
+            drop(cmd_tx);
+            (RelaySinks::default(), None)
+        }
+    };
+
+    let status =
+        run_relay(&pty, child, 1, Some(0), Some(&saved), sinks, cmd_rx).context("relay failure")?;
+    if let Some(mut finalizer) = final_tx {
+        finalizer.finish(status);
+    }
+    Ok(status.exit_code())
+}
+
+fn default_name(executable: &str, config: &EffectiveConfig) -> String {
+    let exe = std::path::Path::new(executable)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "command".into());
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let rendered = config
+        .defaults
+        .job_name_template
+        .replace("{executable}", &exe)
+        .replace("{timestamp}", &timestamp.to_string())
+        .replace("{pid}", &std::process::id().to_string());
+    sanitize_name(&rendered)
+}
+
+fn tag(msg: &DaemonToClient) -> &'static str {
+    match msg {
+        DaemonToClient::PendingLaunch { .. } => "pending_launch",
+        DaemonToClient::Launched { .. } => "launched",
+        DaemonToClient::Registered { .. } => "registered",
+        DaemonToClient::Error { .. } => "error",
+        _ => "unexpected",
+    }
 }
 
 fn load_config() -> EffectiveConfig {
@@ -163,7 +286,7 @@ fn sanitize_name(name: &str) -> String {
 pub struct WrapperLink {
     pub job_id: JobId,
     read: std::os::unix::net::UnixStream,
-    writer_tx: mpsc::Sender<ClientToDaemon>,
+    writer_tx: mpsc::SyncSender<ClientToDaemon>,
     writer_handle: std::thread::JoinHandle<()>,
     sequence: u64,
 }
@@ -174,6 +297,7 @@ struct JobIdentity {
     arguments: Vec<std::ffi::OsString>,
     job_name: String,
     profile_name: String,
+    record_output: bool,
 }
 
 /// Register the job with the daemon, returning an error for degraded mode.
@@ -183,6 +307,7 @@ fn register_with_daemon(
     saved: &SavedTerminal,
     child: &jobwrap_pty::SpawnedChild,
     identity: JobIdentity,
+    preassigned_job_id: Option<JobId>,
 ) -> Result<WrapperLink, String> {
     let (mut read, mut write, _daemon_pid) =
         connect_wrapper_stream(paths, config.daemon.auto_start).map_err(|e| e.to_string())?;
@@ -203,7 +328,7 @@ fn register_with_daemon(
         .collect::<Vec<_>>()
         .join(" ");
 
-    let job_id = JobId::generate().map_err(|e| e.to_string())?;
+    let job_id = preassigned_job_id.unwrap_or(JobId::generate().map_err(|e| e.to_string())?);
     let register = ClientToDaemon::RegisterJob(RegisterJob {
         id: job_id,
         display_name: sanitize_name(&identity.job_name),
@@ -220,6 +345,7 @@ fn register_with_daemon(
             .unwrap_or_default(),
         profile_name: identity.profile_name,
         profile,
+        record_output: identity.record_output,
         terminal_attached: saved.is_tty,
         terminal_size: saved.window_size,
         terminal_device: saved.device.clone(),
@@ -233,7 +359,9 @@ fn register_with_daemon(
     match reply {
         DaemonToClient::Registered { .. } => {
             // Start the writer thread owning the write half.
-            let (writer_tx, writer_rx) = mpsc::channel();
+            // Bound daemon-bound output so a slow or wedged daemon applies
+            // backpressure instead of growing the wrapper without limit.
+            let (writer_tx, writer_rx) = mpsc::sync_channel(256);
             let writer_handle = spawn_writer(write, writer_rx);
             Ok(WrapperLink {
                 job_id,
@@ -248,17 +376,10 @@ fn register_with_daemon(
     }
 }
 
-fn tag(msg: &DaemonToClient) -> &'static str {
-    match msg {
-        DaemonToClient::Registered { .. } => "registered",
-        _ => "unexpected",
-    }
-}
-
 /// A handle that reports the final child status to the daemon and waits for
 /// the writer thread to drain before the wrapper process exits.
 pub struct Finalizer {
-    writer_tx: Option<mpsc::Sender<ClientToDaemon>>,
+    writer_tx: Option<mpsc::SyncSender<ClientToDaemon>>,
     writer_handle: Option<std::thread::JoinHandle<()>>,
 }
 

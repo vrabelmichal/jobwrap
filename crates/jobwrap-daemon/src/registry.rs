@@ -4,7 +4,9 @@
 //! and the event broadcast used by the web layer.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use chrono::Utc;
 use jobwrap_config::{EffectiveConfig, RuntimePaths};
@@ -15,7 +17,10 @@ use jobwrap_protocol::{JobSummary, RegisterResult, ToWrapper};
 use jobwrap_store::{LogLimits, OutputLog, Store};
 use tokio::sync::{broadcast, mpsc};
 
+use crate::launch::LaunchStore;
+use crate::probe::ProbeStore;
 use crate::registry::auth::AuthOps;
+use crate::terminal::{RegisteredTerminal, TerminalRegistry};
 
 /// A job with an attached wrapper.
 #[derive(Debug)]
@@ -27,6 +32,14 @@ pub struct LiveJob {
     pub log: Option<OutputLog>,
 }
 
+#[derive(Debug, Clone)]
+struct IdempotencyEntry {
+    request: jobwrap_protocol::LaunchRequest,
+    launch_id: String,
+    job_id: JobId,
+    created_at: chrono::DateTime<Utc>,
+}
+
 /// The registry state.
 pub struct Registry {
     store: Mutex<Store>,
@@ -34,8 +47,18 @@ pub struct Registry {
     pub runtime: RuntimePaths,
     pub config: EffectiveConfig,
     broadcast_tx: broadcast::Sender<jobwrap_web::ServerEvent>,
+    recorded_log_bytes: AtomicU64,
     /// Attempts for password login rate limiting.
     login_attempts: Mutex<Vec<chrono::DateTime<Utc>>>,
+    /// Launch idempotency, scoped by requester. The original request is kept
+    /// so reusing a key for different arguments can be rejected.
+    idempotency: Mutex<HashMap<(String, String), IdempotencyEntry>>,
+    /// Pending one-time launches and the launch concurrency counter.
+    pub launch_store: LaunchStore,
+    /// Registered terminals for cooperative existing-terminal launches.
+    pub terminals: TerminalRegistry,
+    /// Help-probe previews and results.
+    pub probe_store: ProbeStore,
 }
 
 pub mod auth;
@@ -43,13 +66,19 @@ pub mod auth;
 impl Registry {
     pub fn new(store: Store, runtime: RuntimePaths, config: EffectiveConfig) -> Self {
         let (broadcast_tx, _) = broadcast::channel(1024);
+        let recorded_log_bytes = jobwrap_store::total_log_bytes(&runtime.logs_dir);
         Self {
             store: Mutex::new(store),
             jobs: Mutex::new(HashMap::new()),
             runtime,
             config,
             broadcast_tx,
+            recorded_log_bytes: AtomicU64::new(recorded_log_bytes),
             login_attempts: Mutex::new(Vec::new()),
+            idempotency: Mutex::new(HashMap::new()),
+            launch_store: LaunchStore::new(),
+            terminals: TerminalRegistry::new(),
+            probe_store: ProbeStore::new(),
         }
     }
 
@@ -70,11 +99,10 @@ impl Registry {
         let records = store.list_jobs()?;
         let mut jobs = self.jobs.lock().expect("jobs lock");
         for record in records {
-            if record.state.is_finished() {
-                continue;
-            }
             let mut record = record;
-            record.state = JobState::Disconnected;
+            if !record.state.is_finished() {
+                record.state = JobState::Disconnected;
+            }
             jobs.insert(
                 record.id,
                 LiveJob {
@@ -132,16 +160,38 @@ impl Registry {
             return Err("job already registered".to_string());
         }
 
-        let log = if self.config.defaults.record_output {
-            OutputLog::create(&self.runtime.logs_dir, id, self.log_limits()).ok()
+        {
+            let store = self.store.lock().expect("store lock");
+            if store
+                .get_job(id)
+                .map_err(|e| format!("could not check job id: {e}"))?
+                .is_some()
+            {
+                return Err("job id already exists in persistent storage".to_string());
+            }
+        }
+
+        let log = if self.config.defaults.record_output && register.record_output {
+            Some(
+                OutputLog::create(&self.runtime.logs_dir, id, self.log_limits())
+                    .map_err(|e| format!("could not create output log: {e}"))?,
+            )
         } else {
             None
         };
 
         {
             let store = self.store.lock().expect("store lock");
-            let _ = store.insert_job(&record);
-            let _ = store.insert_event(&Event::new(id, EventId(1), EventKind::Registered));
+            if let Err(error) = store.insert_job(&record) {
+                drop(store);
+                let _ = jobwrap_store::delete_log(&self.runtime.logs_dir, id);
+                return Err(format!("could not persist job: {error}"));
+            }
+            if let Err(error) =
+                store.insert_event(&Event::new(id, EventId(1), EventKind::Registered))
+            {
+                tracing::warn!(job_id = %id, error = %error, "could not persist registration event");
+            }
         }
 
         jobs.insert(
@@ -166,6 +216,245 @@ impl Registry {
         })
     }
 
+    /// Launch a process via the API, web, or CLI.
+    ///
+    /// All modes funnel through [`crate::launch::execute`]. Managed processes
+    /// are spawned directly; new-terminal launches create a one-time launch
+    /// capability for the `jobwrap attach-launch` helper; existing-terminal
+    /// launches deliver through a registered cooperative control channel.
+    pub fn launch(
+        &self,
+        principal: &Principal,
+        req: &jobwrap_protocol::LaunchRequest,
+    ) -> Result<(String, JobId), String> {
+        if !self.config.launch.enabled {
+            return Err("process creation via the API is disabled by configuration".into());
+        }
+        if self.config.launch.require_preview {
+            return Err(
+                "launch preview is required by configuration, but preview execution is not implemented; no process was started"
+                    .into(),
+            );
+        }
+        let idempotency_key = &req.idempotency_key;
+        if idempotency_key.is_empty() || idempotency_key.len() > 128 {
+            return Err("idempotency key must contain 1 to 128 characters".into());
+        }
+        let requester = principal_label(principal);
+        let map_key = (requester, idempotency_key.clone());
+
+        // Idempotency: replaying the exact request returns the original result;
+        // changing any field while reusing the key is an error.
+        {
+            let mut keys = self.idempotency.lock().expect("idempotency lock");
+            let cutoff = Utc::now() - chrono::Duration::hours(24);
+            keys.retain(|_, entry| entry.created_at >= cutoff);
+            if let Some(entry) = keys.get(&map_key) {
+                if entry.request != *req {
+                    return Err(
+                        "idempotency key was already used for a different launch request".into(),
+                    );
+                }
+                return Ok((entry.launch_id.clone(), entry.job_id));
+            }
+        }
+
+        if !self
+            .launch_store
+            .inc_concurrent(self.config.launch.maximum_concurrent_jobs)
+        {
+            return Err("launch capacity exceeded; too many concurrent jobs".into());
+        }
+
+        let result = crate::launch::execute(self, principal, req);
+
+        // Only record idempotency on success.
+        if let Ok((launch_id, job_id)) = &result {
+            let mut keys = self.idempotency.lock().expect("idempotency lock");
+            if keys.len() >= 1024 {
+                if let Some(oldest) = keys
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.created_at)
+                    .map(|(key, _)| key.clone())
+                {
+                    keys.remove(&oldest);
+                }
+            }
+            keys.insert(
+                map_key,
+                IdempotencyEntry {
+                    request: req.clone(),
+                    launch_id: launch_id.clone(),
+                    job_id: *job_id,
+                    created_at: Utc::now(),
+                },
+            );
+        }
+        // This counter limits simultaneous launch setup. Pending terminal
+        // capabilities have their own separately bounded store.
+        self.launch_store.dec_concurrent();
+        result
+    }
+
+    /// The `attach-launch` helper retrieves a pending launch.
+    pub fn attach_launch(
+        &self,
+        launch_id: &str,
+    ) -> Result<(jobwrap_protocol::LaunchRequest, JobId), String> {
+        crate::launch::attach_launch(self, launch_id)
+    }
+
+    // ---- terminals ----
+
+    pub fn list_terminals(&self, principal: &Principal) -> Vec<jobwrap_protocol::TerminalInfo> {
+        crate::launch::list_terminals(self, principal)
+    }
+
+    pub fn register_terminal(&self, terminal: RegisteredTerminal) {
+        crate::launch::register_terminal(self, terminal);
+    }
+
+    // ---- documentation ----
+
+    pub fn identify_target(
+        &self,
+        principal: &Principal,
+        target: &str,
+    ) -> Result<jobwrap_protocol::TargetInfo, String> {
+        use jobwrap_core::{authorize_global, AuthorizationDecision, GlobalPermission};
+        match authorize_global(principal, GlobalPermission::InspectStaticMetadata) {
+            AuthorizationDecision::Allow => {}
+            _ => return Err("inspection not authorized".into()),
+        }
+        Ok(crate::docs::identify(target).info)
+    }
+
+    pub fn search_man_pages(
+        &self,
+        principal: &Principal,
+        target: &str,
+    ) -> Result<Vec<jobwrap_protocol::ManPageMatch>, String> {
+        use jobwrap_core::{authorize_global, AuthorizationDecision, GlobalPermission};
+        match authorize_global(principal, GlobalPermission::InspectManPage) {
+            AuthorizationDecision::Allow => {}
+            _ => return Err("man-page inspection not authorized".into()),
+        }
+        Ok(crate::docs::search_man_pages(target))
+    }
+
+    pub fn fetch_man_page(
+        &self,
+        principal: &Principal,
+        name: &str,
+        section: Option<String>,
+    ) -> Result<Option<jobwrap_protocol::ManPage>, String> {
+        use jobwrap_core::{authorize_global, AuthorizationDecision, GlobalPermission};
+        match authorize_global(principal, GlobalPermission::InspectManPage) {
+            AuthorizationDecision::Allow => {}
+            _ => return Err("man-page inspection not authorized".into()),
+        }
+        Ok(crate::docs::fetch_man_page(name, section.as_deref()))
+    }
+
+    // ---- help probes ----
+
+    pub fn preview_help_probe(
+        &self,
+        principal: &Principal,
+        req: &jobwrap_protocol::HelpProbeRequest,
+    ) -> Result<jobwrap_protocol::ProbePreview, String> {
+        use jobwrap_core::{authorize_global, AuthorizationDecision, GlobalPermission};
+        let permission = match req.kind {
+            jobwrap_protocol::HelpProbeKind::Interpreter => GlobalPermission::ProbeInterpreterHelp,
+            jobwrap_protocol::HelpProbeKind::Executable => GlobalPermission::ProbeExecutableHelp,
+            jobwrap_protocol::HelpProbeKind::Script => GlobalPermission::ProbeScriptHelp,
+            jobwrap_protocol::HelpProbeKind::Custom => GlobalPermission::ProbeScriptHelp,
+        };
+        match req.kind {
+            jobwrap_protocol::HelpProbeKind::Interpreter
+                if !self.config.help.allow_interpreter_probes =>
+            {
+                return Err("interpreter help probes are disabled by configuration".into())
+            }
+            jobwrap_protocol::HelpProbeKind::Executable
+            | jobwrap_protocol::HelpProbeKind::Script
+                if !self.config.help.allow_script_probes =>
+            {
+                return Err("target-executing help probes are disabled by configuration".into())
+            }
+            jobwrap_protocol::HelpProbeKind::Custom => {
+                return Err("custom help probes are not supported".into())
+            }
+            _ => {}
+        }
+        match authorize_global(principal, permission) {
+            AuthorizationDecision::Allow => {}
+            AuthorizationDecision::Disabled => return Err("help probes are disabled".into()),
+            _ => return Err("help probe not authorized".into()),
+        }
+        crate::probe::preview_help_probe(&self.probe_store, req)
+    }
+
+    pub fn execute_help_probe(
+        &self,
+        _principal: &Principal,
+        preview_id: &str,
+    ) -> Result<jobwrap_protocol::HelpProbeResult, String> {
+        // Authorization was validated at preview time; the probe is bound to
+        // the stored immutable preview.
+        let timeout = Duration::from_secs(self.config.help.probe_timeout_seconds.clamp(1, 30));
+        let limit = usize::try_from(self.config.help.probe_output_limit_bytes.clamp(1, 8 << 20))
+            .unwrap_or(1 << 20);
+        let result =
+            crate::probe::execute_help_probe(&self.probe_store, preview_id, timeout, limit)?;
+
+        // Phase 8: cache the classification keyed by target fingerprint and
+        // probe argument.
+        if self.config.help.cache_results {
+            let identified = crate::docs::identify(&result.invocation.executable);
+            let cache_key = crate::docs::cache_key(
+                &identified.info.resolved_path,
+                identified.info.fingerprint.as_deref().unwrap_or(""),
+                &result.invocation.arguments.join(" "),
+            );
+            let store = self.store.lock().expect("store lock");
+            let _ = store.help_cache_put(&jobwrap_store::HelpCacheEntry {
+                key: cache_key,
+                target_path: identified.info.resolved_path,
+                target_fingerprint: identified.info.fingerprint.unwrap_or_default(),
+                interpreter: identified.interpreter,
+                probe_argument: result.invocation.arguments.join(" "),
+                classification: result.classification.to_string(),
+                output_digest: {
+                    use sha2::Digest;
+                    let d = sha2::Sha256::digest(result.stdout.as_bytes());
+                    d.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                },
+                warning: if result.warning.is_empty() {
+                    None
+                } else {
+                    Some(result.warning.clone())
+                },
+                cached_at: Utc::now(),
+            });
+        }
+        Ok(result)
+    }
+
+    pub fn get_help_probe(
+        &self,
+        principal: &Principal,
+        probe_id: &str,
+    ) -> Result<Option<jobwrap_protocol::HelpProbeResult>, String> {
+        let _ = principal;
+        Ok(self.probe_store.get_result(probe_id))
+    }
+
+    pub fn delete_help_probe(&self, principal: &Principal, probe_id: &str) -> Result<bool, String> {
+        let _ = principal;
+        Ok(self.probe_store.delete_result(probe_id))
+    }
+
     /// Append a chunk of terminal output for a job.
     pub fn append_output(&self, job_id: JobId, sequence: u64, data: &[u8]) {
         let mut jobs = self.jobs.lock().expect("jobs lock");
@@ -173,18 +462,39 @@ impl Registry {
             return;
         };
         if let Some(log) = job.log.as_mut() {
-            let recording = log.append(data);
+            let previous_bytes = job.record.log.bytes_written;
+            let was_truncated = job.record.log.truncated;
+            let requested = data.len() as u64;
+            let global_limit = self.log_limits().maximum_total_bytes;
+            let reserved = !job.record.log.truncated
+                && self
+                    .recorded_log_bytes
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                        current
+                            .checked_add(requested)
+                            .filter(|next| *next <= global_limit)
+                    })
+                    .is_ok();
+            let recording = reserved && log.append(data);
+            if reserved && !recording {
+                self.recorded_log_bytes
+                    .fetch_sub(requested, Ordering::AcqRel);
+            }
             job.record.log.last_sequence = sequence;
             job.record.log.bytes_written = log.size();
             job.record.log.truncated = log.is_truncated();
             if !recording {
                 job.record.log.truncated = true;
             }
-            let _ = self
-                .store
-                .lock()
-                .expect("store lock")
-                .update_job(&job.record);
+            if previous_bytes / (1024 * 1024) != job.record.log.bytes_written / (1024 * 1024)
+                || was_truncated != job.record.log.truncated
+            {
+                let _ = self
+                    .store
+                    .lock()
+                    .expect("store lock")
+                    .update_job(&job.record);
+            }
         } else {
             job.record.log.last_sequence = sequence;
         }
@@ -290,21 +600,18 @@ impl Registry {
             .get(&job_id)
             .ok_or_else(|| jobwrap_web::ApiError::not_found("no such job"))?;
         check_authorized(principal, &job.record, permission)?;
-        let pgid = job
-            .record
-            .process_group_id
-            .ok_or_else(|| jobwrap_web::ApiError::conflict("no process group recorded"))?;
-        let nix_signal = match signal {
-            jobwrap_core::Signal::Interrupt => nix::sys::signal::Signal::SIGINT,
-            jobwrap_core::Signal::Terminate => nix::sys::signal::Signal::SIGTERM,
-            jobwrap_core::Signal::Hangup => nix::sys::signal::Signal::SIGHUP,
-            jobwrap_core::Signal::Quit => nix::sys::signal::Signal::SIGQUIT,
-            jobwrap_core::Signal::Stop => nix::sys::signal::Signal::SIGSTOP,
-            jobwrap_core::Signal::Continue => nix::sys::signal::Signal::SIGCONT,
-            jobwrap_core::Signal::Kill => nix::sys::signal::Signal::SIGKILL,
-        };
-        nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid.0), nix_signal)
-            .map_err(|_| jobwrap_web::ApiError::conflict("the process group no longer exists"))?;
+        if !job.record.state.is_controllable() {
+            return Err(jobwrap_web::ApiError::conflict(
+                "the job is no longer controllable",
+            ));
+        }
+        let tx = job.wrapper_tx.as_ref().ok_or_else(|| {
+            jobwrap_web::ApiError::conflict(
+                "the wrapper is disconnected; refusing to signal a potentially reused process id",
+            )
+        })?;
+        tx.try_send(ToWrapper::SendSignal { signal })
+            .map_err(|_| jobwrap_web::ApiError::conflict("the wrapper disconnected"))?;
         let _ = self.store.lock().expect("store lock").record_audit(
             Some(job_id),
             &principal_label(principal),
@@ -341,10 +648,24 @@ impl Registry {
             .get(&job_id)
             .ok_or_else(|| jobwrap_web::ApiError::not_found("no such job"))?;
         check_authorized(principal, &job.record, jobwrap_core::Permission::Delete)?;
+        if !job.record.state.is_finished() {
+            return Err(jobwrap_web::ApiError::conflict(
+                "a running or disconnected job record cannot be deleted; stop it and wait for completion first",
+            ));
+        }
         // Remove from the live registry and the database; keep or remove the
         // log according to the policy (we remove it for a delete).
-        let _ = jobwrap_store::delete_log(&self.runtime.logs_dir, job_id);
-        let _ = self.store.lock().expect("store lock").delete_job(job_id);
+        let freed = jobwrap_store::delete_log(&self.runtime.logs_dir, job_id)
+            .map_err(|e| jobwrap_web::ApiError::internal(format!("could not delete log: {e}")))?;
+        self.recorded_log_bytes.fetch_sub(
+            freed.min(self.recorded_log_bytes.load(Ordering::Acquire)),
+            Ordering::AcqRel,
+        );
+        self.store
+            .lock()
+            .expect("store lock")
+            .delete_job(job_id)
+            .map_err(|e| jobwrap_web::ApiError::internal(format!("could not delete job: {e}")))?;
         jobs.remove(&job_id);
         Ok(())
     }
@@ -385,26 +706,29 @@ impl Registry {
         &self,
         principal: &Principal,
         job_id: JobId,
-        _sequence_start: u64,
+        sequence_start: u64,
     ) -> Result<jobwrap_protocol::OutputSlice, jobwrap_web::ApiError> {
         let jobs = self.jobs.lock().expect("jobs lock");
         let job = jobs
             .get(&job_id)
             .ok_or_else(|| jobwrap_web::ApiError::not_found("no such job"))?;
         check_authorized(principal, &job.record, jobwrap_core::Permission::ViewOutput)?;
-        let data = if job.log.is_some() {
-            match jobwrap_store::OutputLog::open(&self.runtime.logs_dir, job_id) {
-                Ok(mut log) => log.read_at(0, 4 * 1024 * 1024).unwrap_or_default(),
-                Err(_) => Vec::new(),
+        let data = match jobwrap_store::OutputLog::open(&self.runtime.logs_dir, job_id) {
+            Ok(mut log) => log
+                .read_at(sequence_start, 1024 * 1024)
+                .map_err(|e| jobwrap_web::ApiError::internal(format!("could not read log: {e}")))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                return Err(jobwrap_web::ApiError::internal(format!(
+                    "could not open log: {error}"
+                )))
             }
-        } else {
-            Vec::new()
         };
         Ok(jobwrap_protocol::OutputSlice {
             job_id,
-            sequence_start: 0,
+            sequence_start,
             data_base64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
-            truncated: false,
+            truncated: job.record.log.truncated,
         })
     }
 
@@ -431,7 +755,7 @@ impl Registry {
     }
 }
 
-fn check_authorized(
+pub(crate) fn check_authorized(
     principal: &Principal,
     record: &JobRecord,
     permission: jobwrap_core::Permission,

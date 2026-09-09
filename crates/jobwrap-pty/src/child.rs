@@ -82,7 +82,11 @@ pub fn wait_for_child(
         // SAFETY: waitpid with WUNTRACED|WCONTINUED reports stops and resumes.
         let ret = unsafe { libc::waitpid(pid.0, &mut status, libc::WUNTRACED | libc::WCONTINUED) };
         if ret == -1 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
         }
         if status_exited(status) {
             let code = exit_code(status);

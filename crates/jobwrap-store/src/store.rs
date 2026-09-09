@@ -44,7 +44,22 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+            let metadata = std::fs::symlink_metadata(parent)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(StoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "database directory must be a real directory, not a symlink",
+                )));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+            }
         }
+        reject_unsafe_database_path(path)?;
+        reject_unsafe_database_path(&sidecar_path(path, "-wal"))?;
+        reject_unsafe_database_path(&sidecar_path(path, "-shm"))?;
         let mut conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -318,6 +333,21 @@ impl Store {
         Ok(())
     }
 
+    pub fn prune_expired_sessions(&self, now: DateTime<Utc>) -> Result<usize, StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM sessions WHERE expires_at <= ?1",
+                params![now.to_rfc3339()],
+            )
+            .map_err(StoreError::from)
+    }
+
+    pub fn session_count(&self) -> Result<u64, StoreError> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .map_err(StoreError::from)
+    }
+
     // ---- audit ----
 
     pub fn record_audit(
@@ -339,6 +369,96 @@ impl Store {
         )?;
         Ok(())
     }
+
+    // ---- help cache ----
+
+    pub fn help_cache_get(&self, key: &str) -> Result<Option<HelpCacheEntry>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT key, target_path, target_fingerprint, interpreter, probe_argument,
+                        classification, output_digest, warning, cached_at
+                 FROM help_cache WHERE key = ?1",
+                params![key],
+                |row| {
+                    Ok(HelpCacheEntry {
+                        key: row.get(0)?,
+                        target_path: row.get(1)?,
+                        target_fingerprint: row.get(2)?,
+                        interpreter: row.get(3)?,
+                        probe_argument: row.get(4)?,
+                        classification: row.get(5)?,
+                        output_digest: row.get(6)?,
+                        warning: row.get(7)?,
+                        cached_at: parse_rfc(&row.get::<_, String>(8)?).unwrap_or_else(Utc::now),
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn help_cache_put(&self, entry: &HelpCacheEntry) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO help_cache (key, target_path, target_fingerprint, interpreter,
+                probe_argument, classification, output_digest, warning, cached_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(key) DO UPDATE SET
+               target_path=excluded.target_path,
+               target_fingerprint=excluded.target_fingerprint,
+               interpreter=excluded.interpreter,
+               probe_argument=excluded.probe_argument,
+               classification=excluded.classification,
+               output_digest=excluded.output_digest,
+               warning=excluded.warning,
+               cached_at=excluded.cached_at",
+            params![
+                entry.key,
+                entry.target_path,
+                entry.target_fingerprint,
+                entry.interpreter,
+                entry.probe_argument,
+                entry.classification,
+                entry.output_digest,
+                entry.warning,
+                entry.cached_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+}
+
+fn sidecar_path(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    value.into()
+}
+
+fn reject_unsafe_database_path(path: &Path) -> Result<(), StoreError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(StoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("refusing unsafe database path {}", path.display()),
+            )))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(StoreError::Io(error)),
+    }
+}
+
+/// A cached help-probe result.
+#[derive(Debug, Clone)]
+pub struct HelpCacheEntry {
+    pub key: String,
+    pub target_path: String,
+    pub target_fingerprint: String,
+    pub interpreter: Option<String>,
+    pub probe_argument: String,
+    pub classification: String,
+    pub output_digest: String,
+    pub warning: Option<String>,
+    pub cached_at: DateTime<Utc>,
 }
 
 #[cfg(test)]
@@ -378,6 +498,7 @@ mod tests {
                 signal_kill: AccessLevel::Owner,
                 restart: AccessLevel::Owner,
                 delete: AccessLevel::Owner,
+                launch: AccessLevel::Owner,
             }
             .into_policy(),
             state: JobState::Running,

@@ -82,6 +82,18 @@ fn migration_001(conn: &Connection) -> rusqlite::Result<()> {
             operation TEXT NOT NULL,
             detail    TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS help_cache (
+            key               TEXT PRIMARY KEY,
+            target_path       TEXT NOT NULL,
+            target_fingerprint TEXT NOT NULL,
+            interpreter       TEXT,
+            probe_argument    TEXT NOT NULL,
+            classification    TEXT NOT NULL,
+            output_digest     TEXT NOT NULL,
+            warning           TEXT,
+            cached_at         TEXT NOT NULL
+        );
         "#,
     )
 }

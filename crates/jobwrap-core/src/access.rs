@@ -26,6 +26,7 @@ pub enum Permission {
     Delete,
     DownloadLogs,
     ModifyPolicy,
+    Launch,
 }
 
 impl Permission {
@@ -46,7 +47,92 @@ impl Permission {
             Permission::Delete => "delete the job record",
             Permission::DownloadLogs => "download the output log",
             Permission::ModifyPolicy => "change the access policy",
+            Permission::Launch => "launch a managed process",
         }
+    }
+}
+
+/// Global (non-job-specific) permissions for operations such as launching and
+/// documentation inspection. These are authorized by [`authorize_global`]
+/// rather than against a particular job record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlobalPermission {
+    LaunchManagedProcess,
+    LaunchInNewTerminal,
+    LaunchInExistingTerminal,
+    UseShellExecution,
+    ProbeInterpreterHelp,
+    ProbeExecutableHelp,
+    ProbeScriptHelp,
+    InspectStaticMetadata,
+    InspectManPage,
+}
+
+impl GlobalPermission {
+    /// A human-readable description.
+    pub fn describe(self) -> &'static str {
+        match self {
+            GlobalPermission::LaunchManagedProcess => "launch a managed process",
+            GlobalPermission::LaunchInNewTerminal => "launch in a new terminal",
+            GlobalPermission::LaunchInExistingTerminal => "launch in an existing terminal",
+            GlobalPermission::UseShellExecution => "execute a shell command string",
+            GlobalPermission::ProbeInterpreterHelp => "probe an interpreter's help",
+            GlobalPermission::ProbeExecutableHelp => "probe an executable's help",
+            GlobalPermission::ProbeScriptHelp => "probe a script's help",
+            GlobalPermission::InspectStaticMetadata => "inspect static file metadata",
+            GlobalPermission::InspectManPage => "inspect man pages",
+        }
+    }
+
+    /// The default access tier required for this permission.
+    pub fn default_level(self) -> AccessLevel {
+        match self {
+            GlobalPermission::InspectStaticMetadata | GlobalPermission::InspectManPage => {
+                AccessLevel::Authenticated
+            }
+            GlobalPermission::ProbeInterpreterHelp
+            | GlobalPermission::LaunchManagedProcess
+            | GlobalPermission::LaunchInNewTerminal => AccessLevel::Controller,
+            GlobalPermission::ProbeExecutableHelp
+            | GlobalPermission::ProbeScriptHelp
+            | GlobalPermission::LaunchInExistingTerminal => AccessLevel::Owner,
+            GlobalPermission::UseShellExecution => AccessLevel::Disabled,
+        }
+    }
+}
+
+/// Authorize a global (non-job) operation.
+pub fn authorize_global(
+    principal: &Principal,
+    permission: GlobalPermission,
+) -> AuthorizationDecision {
+    let required = permission.default_level();
+    if required == AccessLevel::Disabled {
+        return AuthorizationDecision::Disabled;
+    }
+
+    // API tokens: grants are the authority.
+    if let Principal::ApiToken { grants, .. } = principal {
+        if grants.iter().any(|g| g.global.contains(&permission)) {
+            return AuthorizationDecision::Allow;
+        }
+        return AuthorizationDecision::Deny { required };
+    }
+
+    // Owner-tier operations require the local Unix user.
+    if required == AccessLevel::Owner {
+        return match principal {
+            Principal::LocalUnixUser { .. } => AuthorizationDecision::Allow,
+            _ => AuthorizationDecision::Deny { required },
+        };
+    }
+
+    let tier = principal_tier(principal);
+    if tier >= required_level_tier(required) {
+        AuthorizationDecision::Allow
+    } else {
+        AuthorizationDecision::Deny { required }
     }
 }
 
@@ -113,6 +199,7 @@ pub struct AccessPolicy {
     pub signal_kill: AccessLevel,
     pub restart: AccessLevel,
     pub delete: AccessLevel,
+    pub launch: AccessLevel,
 }
 
 impl AccessPolicy {
@@ -133,6 +220,7 @@ impl AccessPolicy {
             Permission::Delete => self.delete,
             Permission::DownloadLogs => self.output,
             Permission::ModifyPolicy => AccessLevel::Owner,
+            Permission::Launch => self.launch,
         };
         RequiredAccess { level }
     }
@@ -167,6 +255,8 @@ pub struct TokenGrant {
     pub resource: ResourceSelector,
     /// The permissions granted for matching jobs.
     pub permissions: std::collections::BTreeSet<Permission>,
+    /// Global (non-job-specific) permissions granted by the token.
+    pub global: std::collections::BTreeSet<GlobalPermission>,
 }
 
 /// Which jobs a token grant applies to.
@@ -205,6 +295,7 @@ pub struct ProfileAccess {
     pub signal_kill: AccessLevel,
     pub restart: AccessLevel,
     pub delete: AccessLevel,
+    pub launch: AccessLevel,
 }
 
 impl ProfileAccess {
@@ -223,6 +314,7 @@ impl ProfileAccess {
             signal_kill: self.signal_kill,
             restart: self.restart,
             delete: self.delete,
+            launch: self.launch,
         }
     }
 }
@@ -357,6 +449,7 @@ mod tests {
                 signal_kill: AccessLevel::Owner,
                 restart: AccessLevel::Owner,
                 delete: AccessLevel::Owner,
+                launch: AccessLevel::Owner,
             },
             state: JobState::Running,
             started_at: chrono::DateTime::UNIX_EPOCH,
@@ -407,6 +500,7 @@ mod tests {
             Permission::Delete,
             Permission::DownloadLogs,
             Permission::ModifyPolicy,
+            Permission::Launch,
         ] {
             assert_eq!(
                 authorize(&owner, &job, p),
@@ -455,6 +549,7 @@ mod tests {
             grants: vec![TokenGrant {
                 resource: ResourceSelector::AllOwned,
                 permissions: [Permission::ViewStatus, Permission::ViewOutput].into(),
+                global: Default::default(),
             }],
         };
         assert_eq!(
@@ -480,6 +575,7 @@ mod tests {
             grants: vec![TokenGrant {
                 resource: ResourceSelector::AllOwned,
                 permissions: [Permission::SendInterrupt, Permission::ViewOutput].into(),
+                global: Default::default(),
             }],
         };
         assert_eq!(
@@ -503,11 +599,112 @@ mod tests {
             grants: vec![TokenGrant {
                 resource: ResourceSelector::Job(other_job_id),
                 permissions: [Permission::SendKill].into(),
+                global: Default::default(),
             }],
         };
         assert!(matches!(
             authorize(&token, &job, Permission::SendKill),
             AuthorizationDecision::Deny { .. }
         ));
+    }
+
+    fn global_token(perms: &[GlobalPermission]) -> Principal {
+        Principal::ApiToken {
+            token_id: "t".into(),
+            grants: vec![TokenGrant {
+                resource: ResourceSelector::AllOwned,
+                permissions: Default::default(),
+                global: perms.iter().copied().collect(),
+            }],
+        }
+    }
+
+    #[test]
+    fn local_user_allowed_all_global_permissions() {
+        let owner = Principal::LocalUnixUser { uid: 1000 };
+        for p in [
+            GlobalPermission::LaunchManagedProcess,
+            GlobalPermission::LaunchInNewTerminal,
+            GlobalPermission::LaunchInExistingTerminal,
+            GlobalPermission::ProbeInterpreterHelp,
+            GlobalPermission::ProbeExecutableHelp,
+            GlobalPermission::ProbeScriptHelp,
+            GlobalPermission::InspectStaticMetadata,
+            GlobalPermission::InspectManPage,
+        ] {
+            assert_eq!(authorize_global(&owner, p), AuthorizationDecision::Allow);
+        }
+    }
+
+    #[test]
+    fn anonymous_cannot_launch_or_probe() {
+        let anon = Principal::Anonymous;
+        assert!(matches!(
+            authorize_global(&anon, GlobalPermission::LaunchManagedProcess),
+            AuthorizationDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            authorize_global(&anon, GlobalPermission::InspectManPage),
+            AuthorizationDecision::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn token_global_scope_grants_only_listed_permissions() {
+        let token = global_token(&[GlobalPermission::LaunchManagedProcess]);
+        assert_eq!(
+            authorize_global(&token, GlobalPermission::LaunchManagedProcess),
+            AuthorizationDecision::Allow
+        );
+        // Not granted: opening a new terminal or probing.
+        assert!(matches!(
+            authorize_global(&token, GlobalPermission::LaunchInNewTerminal),
+            AuthorizationDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            authorize_global(&token, GlobalPermission::ProbeScriptHelp),
+            AuthorizationDecision::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn browser_session_controller_cannot_owner_only_ops() {
+        let session = Principal::BrowserSession {
+            session_id: "s".into(),
+        };
+        // Controller may launch managed processes and inspect man pages.
+        assert_eq!(
+            authorize_global(&session, GlobalPermission::LaunchManagedProcess),
+            AuthorizationDecision::Allow
+        );
+        assert_eq!(
+            authorize_global(&session, GlobalPermission::InspectManPage),
+            AuthorizationDecision::Allow
+        );
+        // But not owner-only operations.
+        assert!(matches!(
+            authorize_global(&session, GlobalPermission::LaunchInExistingTerminal),
+            AuthorizationDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            authorize_global(&session, GlobalPermission::ProbeScriptHelp),
+            AuthorizationDecision::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn shell_execution_disabled_for_everyone() {
+        for principal in [
+            Principal::LocalUnixUser { uid: 1000 },
+            Principal::BrowserSession {
+                session_id: "s".into(),
+            },
+            global_token(&[GlobalPermission::LaunchManagedProcess]),
+        ] {
+            assert_eq!(
+                authorize_global(&principal, GlobalPermission::UseShellExecution),
+                AuthorizationDecision::Disabled
+            );
+        }
     }
 }

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use jobwrap_core::{Permission, ResourceSelector, TokenGrant};
+use jobwrap_core::{GlobalPermission, Permission, ResourceSelector, TokenGrant};
 use jobwrap_store::StoredToken;
 
 /// Map a scope permission segment to the core permissions it grants.
@@ -46,26 +46,105 @@ pub fn token_to_grants(token: &StoredToken) -> Vec<TokenGrant> {
     let mut grants: Vec<TokenGrant> = Vec::new();
     for scope in &token.scopes {
         let parts = scope.parsed.as_slice();
-        let (resource, perm_part) = match parts {
-            [j, id, perm @ ..] if j == "job" && id == "*" => (ResourceSelector::AllOwned, perm),
+        let grant = match parts {
+            [j, id, perm @ ..] if j == "job" && id == "*" => {
+                let permissions: BTreeSet<Permission> = permission_for(perm).into_iter().collect();
+                if permissions.is_empty() {
+                    continue;
+                }
+                Some(TokenGrant {
+                    resource: ResourceSelector::AllOwned,
+                    permissions,
+                    global: BTreeSet::new(),
+                })
+            }
             [j, id, perm @ ..] if j == "job" => {
                 let Some(job_id) = id.parse().ok() else {
                     continue;
                 };
-                (ResourceSelector::Job(job_id), perm)
+                let permissions: BTreeSet<Permission> = permission_for(perm).into_iter().collect();
+                if permissions.is_empty() {
+                    continue;
+                }
+                Some(TokenGrant {
+                    resource: ResourceSelector::Job(job_id),
+                    permissions,
+                    global: BTreeSet::new(),
+                })
+            }
+            [j, action] if j == "jobs" => {
+                let global: BTreeSet<GlobalPermission> =
+                    std::iter::once(global_action_permission(action))
+                        .flatten()
+                        .collect();
+                if global.is_empty() {
+                    continue;
+                }
+                Some(TokenGrant {
+                    resource: ResourceSelector::AllOwned,
+                    permissions: BTreeSet::new(),
+                    global,
+                })
+            }
+            [j, action, target] if j == "jobs" && action == "launch" => {
+                let global: BTreeSet<GlobalPermission> = match target.as_str() {
+                    "new-terminal" => [GlobalPermission::LaunchInNewTerminal]
+                        .into_iter()
+                        .collect(),
+                    "existing-terminal" => [GlobalPermission::LaunchInExistingTerminal]
+                        .into_iter()
+                        .collect(),
+                    _ => continue,
+                };
+                Some(TokenGrant {
+                    resource: ResourceSelector::AllOwned,
+                    permissions: BTreeSet::new(),
+                    global,
+                })
+            }
+            [j, kind, action] if j == "docs" => {
+                let global: BTreeSet<GlobalPermission> =
+                    std::iter::once(docs_action_permission(kind, action))
+                        .flatten()
+                        .collect();
+                if global.is_empty() {
+                    continue;
+                }
+                Some(TokenGrant {
+                    resource: ResourceSelector::AllOwned,
+                    permissions: BTreeSet::new(),
+                    global,
+                })
             }
             _ => continue,
         };
-        let permissions: BTreeSet<Permission> = permission_for(perm_part).into_iter().collect();
-        if permissions.is_empty() {
-            continue;
+        if let Some(g) = grant {
+            grants.push(g);
         }
-        grants.push(TokenGrant {
-            resource,
-            permissions,
-        });
     }
     grants
+}
+
+/// Map a global `jobs:*` action to a core [`GlobalPermission`], if any.
+fn global_action_permission(action: &str) -> Option<GlobalPermission> {
+    match action {
+        "launch" => Some(GlobalPermission::LaunchManagedProcess),
+        "launch:new-terminal" => Some(GlobalPermission::LaunchInNewTerminal),
+        "launch:existing-terminal" => Some(GlobalPermission::LaunchInExistingTerminal),
+        _ => None,
+    }
+}
+
+/// Map a `docs:<kind>:<action>` scope to a core [`GlobalPermission`].
+fn docs_action_permission(kind: &str, action: &str) -> Option<GlobalPermission> {
+    match (kind, action) {
+        ("identify", _) => Some(GlobalPermission::InspectStaticMetadata),
+        ("man", _) => Some(GlobalPermission::InspectManPage),
+        ("probe", "interpreter") => Some(GlobalPermission::ProbeInterpreterHelp),
+        ("probe", "executable") => Some(GlobalPermission::ProbeExecutableHelp),
+        ("probe", "script") => Some(GlobalPermission::ProbeScriptHelp),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -118,7 +197,26 @@ mod tests {
     }
 
     #[test]
-    fn jobs_list_scope_grants_no_job_permissions() {
+    fn launch_scope_grants_global_permission() {
+        let token = stored(&["jobs:launch"]);
+        let grants = token_to_grants(&token);
+        assert_eq!(grants.len(), 1);
+        assert!(grants[0]
+            .global
+            .contains(&GlobalPermission::LaunchManagedProcess));
+        assert!(grants[0].permissions.is_empty());
+    }
+
+    #[test]
+    fn docs_man_scope() {
+        let token = stored(&["docs:man:all"]);
+        let grants = token_to_grants(&token);
+        assert_eq!(grants.len(), 1);
+        assert!(grants[0].global.contains(&GlobalPermission::InspectManPage));
+    }
+
+    #[test]
+    fn jobs_list_scope_grants_no_permissions() {
         let token = stored(&["jobs:list"]);
         assert!(token_to_grants(&token).is_empty());
     }

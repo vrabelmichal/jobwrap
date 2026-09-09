@@ -1,14 +1,14 @@
 //! Effective configuration with provenance.
 //!
-//! Precedence (lowest to highest):
+//! Resolution (lowest to highest):
 //!
 //! ```text
-//! built-in defaults < user configuration < trusted project configuration
-//!     < environment overrides < command-line options
+//! built-in defaults < user configuration
 //! ```
 //!
-//! Each resolved field records a [`ValueSource`] so that diagnostics can report
-//! where a value came from.
+//! Profile access fields record a [`ValueSource`] so diagnostics can report
+//! where a value came from. Additional layer variants reserve vocabulary for
+//! future implementations; they are not currently loaded.
 
 use std::collections::BTreeMap;
 
@@ -60,6 +60,7 @@ pub const PROFILE_FIELDS: &[&str] = &[
     "signal_kill",
     "restart",
     "delete",
+    "launch",
 ];
 
 /// A resolved profile.
@@ -78,6 +79,9 @@ pub struct EffectiveConfig {
     pub daemon: DaemonConfig,
     pub defaults: DefaultsConfig,
     pub authentication: AuthenticationConfig,
+    pub launch: LaunchConfig,
+    pub terminal: TerminalConfig,
+    pub help: HelpConfig,
     pub profiles: BTreeMap<String, EffectiveProfile>,
 }
 
@@ -115,6 +119,36 @@ pub struct AuthenticationConfig {
     pub password_attempt_window_seconds: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchConfig {
+    pub enabled: bool,
+    pub default_profile: String,
+    pub default_terminal_mode: String,
+    pub require_preview: bool,
+    pub require_idempotency_key: bool,
+    pub maximum_concurrent_jobs: u64,
+    pub maximum_pending_launches: u64,
+    pub preview_lifetime_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalConfig {
+    pub preferred_backend: String,
+    pub allow_api_backend_selection: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelpConfig {
+    pub assume_help_available: bool,
+    pub prefer_man_pages: bool,
+    pub allow_interpreter_probes: bool,
+    pub allow_script_probes: bool,
+    pub default_probe_argument: String,
+    pub probe_timeout_seconds: u64,
+    pub probe_output_limit_bytes: u64,
+    pub cache_results: bool,
+}
+
 impl EffectiveConfig {
     /// The built-in defaults, independent of any file.
     pub fn builtin() -> Self {
@@ -148,6 +182,34 @@ impl EffectiveConfig {
                 browser_session_minutes: 720,
                 password_attempt_limit: 5,
                 password_attempt_window_seconds: 60,
+            },
+            launch: LaunchConfig {
+                // Remote/daemon-side process creation is an opt-in feature.
+                // The ordinary `jobwrap COMMAND` path remains available.
+                enabled: false,
+                default_profile: "standard".to_string(),
+                default_terminal_mode: "new-terminal".to_string(),
+                require_preview: true,
+                require_idempotency_key: true,
+                maximum_concurrent_jobs: 20,
+                maximum_pending_launches: 20,
+                preview_lifetime_seconds: 300,
+            },
+            terminal: TerminalConfig {
+                preferred_backend: "gnome-terminal".to_string(),
+                allow_api_backend_selection: false,
+            },
+            help: HelpConfig {
+                assume_help_available: false,
+                prefer_man_pages: true,
+                // A help flag still executes code. Keep probes disabled until
+                // the user explicitly accepts that risk in configuration.
+                allow_interpreter_probes: false,
+                allow_script_probes: false,
+                default_probe_argument: "--help".to_string(),
+                probe_timeout_seconds: 3,
+                probe_output_limit_bytes: 1_048_576,
+                cache_results: true,
             },
             profiles,
         }
@@ -220,6 +282,66 @@ impl EffectiveConfig {
                 cfg.authentication.password_attempt_window_seconds = v;
             }
         }
+        if let Some(launch) = &raw.launch {
+            if let Some(v) = launch.enabled {
+                cfg.launch.enabled = v;
+            }
+            if let Some(v) = &launch.default_profile {
+                cfg.launch.default_profile = v.clone();
+            }
+            if let Some(v) = &launch.default_terminal_mode {
+                cfg.launch.default_terminal_mode = v.clone();
+            }
+            if let Some(v) = launch.require_preview {
+                cfg.launch.require_preview = v;
+            }
+            if let Some(v) = launch.require_idempotency_key {
+                cfg.launch.require_idempotency_key = v;
+            }
+            if let Some(v) = launch.maximum_concurrent_jobs {
+                cfg.launch.maximum_concurrent_jobs = v;
+            }
+            if let Some(v) = launch.maximum_pending_launches {
+                cfg.launch.maximum_pending_launches = v;
+            }
+            if let Some(v) = launch.preview_lifetime_seconds {
+                cfg.launch.preview_lifetime_seconds = v;
+            }
+        }
+        if let Some(terminal) = &raw.terminal {
+            if let Some(v) = &terminal.preferred_backend {
+                cfg.terminal.preferred_backend = v.clone();
+            }
+            if let Some(v) = terminal.allow_api_backend_selection {
+                cfg.terminal.allow_api_backend_selection = v;
+            }
+        }
+        if let Some(help) = &raw.help {
+            if let Some(v) = help.assume_help_available {
+                cfg.help.assume_help_available = v;
+            }
+            if let Some(v) = help.prefer_man_pages {
+                cfg.help.prefer_man_pages = v;
+            }
+            if let Some(v) = help.allow_interpreter_probes {
+                cfg.help.allow_interpreter_probes = v;
+            }
+            if let Some(v) = help.allow_script_probes {
+                cfg.help.allow_script_probes = v;
+            }
+            if let Some(v) = &help.default_probe_argument {
+                cfg.help.default_probe_argument = v.clone();
+            }
+            if let Some(v) = help.probe_timeout_seconds {
+                cfg.help.probe_timeout_seconds = v;
+            }
+            if let Some(v) = help.probe_output_limit_bytes {
+                cfg.help.probe_output_limit_bytes = v;
+            }
+            if let Some(v) = help.cache_results {
+                cfg.help.cache_results = v;
+            }
+        }
         for (name, profile_file) in &raw.profiles {
             let entry = cfg.profiles.entry(name.clone()).or_insert_with(|| {
                 // Start from the standard built-in defaults for new profiles.
@@ -230,7 +352,7 @@ impl EffectiveConfig {
         Ok(cfg)
     }
 
-    /// Resolve the profile selected by [`DefaultsConfig::profile`].
+    /// Resolve the profile selected by `DefaultsConfig::profile`.
     pub fn selected_profile(&self) -> Result<&EffectiveProfile, ConfigError> {
         self.profiles
             .get(&self.defaults.profile)
@@ -255,6 +377,7 @@ fn standard_profile(loc: String) -> EffectiveProfile {
         signal_kill: AccessLevel::Owner,
         restart: AccessLevel::Owner,
         delete: AccessLevel::Owner,
+        launch: AccessLevel::Owner,
     };
     for field in PROFILE_FIELDS {
         provenance.insert(
@@ -287,6 +410,7 @@ fn private_profile(loc: String) -> EffectiveProfile {
         signal_kill: AccessLevel::Owner,
         restart: AccessLevel::Owner,
         delete: AccessLevel::Owner,
+        launch: AccessLevel::Owner,
     };
     for field in PROFILE_FIELDS {
         provenance.insert(
@@ -331,4 +455,5 @@ fn apply_profile(profile: &mut EffectiveProfile, file: &super::ProfileFile, loc:
     set!(signal_kill);
     set!(restart);
     set!(delete);
+    set!(launch);
 }

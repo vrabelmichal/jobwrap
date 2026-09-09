@@ -30,7 +30,8 @@ pub trait JobService: Send + Sync {
     /// List jobs visible to the principal.
     fn list_jobs(&self, principal: &Principal) -> Vec<JobSummary>;
 
-    /// The full record for a job (authorized to view status).
+    /// Internal job record lookup. HTTP representations must redact fields
+    /// that require stronger permissions than status access.
     fn get_job(&self, principal: &Principal, id: JobId) -> Result<JobRecord, ApiError>;
 
     /// Output since a sequence number (authorized to view output).
@@ -56,6 +57,60 @@ pub trait JobService: Send + Sync {
 
     /// Delete a job record (authorized).
     fn delete_job(&self, principal: &Principal, id: JobId) -> Result<(), ApiError>;
+
+    /// Launch a managed process from the API or web interface.
+    fn launch(
+        &self,
+        principal: &Principal,
+        req: jobwrap_protocol::LaunchRequest,
+    ) -> Result<(String, JobId), ApiError>;
+
+    // ---- documentation ----
+
+    fn identify_target(
+        &self,
+        principal: &Principal,
+        target: &str,
+    ) -> Result<jobwrap_protocol::TargetInfo, ApiError>;
+
+    fn search_man_pages(
+        &self,
+        principal: &Principal,
+        target: &str,
+    ) -> Result<Vec<jobwrap_protocol::ManPageMatch>, ApiError>;
+
+    fn fetch_man_page(
+        &self,
+        principal: &Principal,
+        name: &str,
+        section: Option<String>,
+    ) -> Result<Option<jobwrap_protocol::ManPage>, ApiError>;
+
+    // ---- help probes ----
+
+    fn preview_help_probe(
+        &self,
+        principal: &Principal,
+        req: jobwrap_protocol::HelpProbeRequest,
+    ) -> Result<jobwrap_protocol::ProbePreview, ApiError>;
+
+    fn execute_help_probe(
+        &self,
+        principal: &Principal,
+        preview_id: &str,
+    ) -> Result<jobwrap_protocol::HelpProbeResult, ApiError>;
+
+    fn get_help_probe(
+        &self,
+        principal: &Principal,
+        probe_id: &str,
+    ) -> Result<Option<jobwrap_protocol::HelpProbeResult>, ApiError>;
+
+    fn delete_help_probe(&self, principal: &Principal, probe_id: &str) -> Result<bool, ApiError>;
+
+    // ---- terminals ----
+
+    fn list_terminals(&self, principal: &Principal) -> Vec<jobwrap_protocol::TerminalInfo>;
 
     /// The broadcast sender used to stream live events.
     fn broadcast(&self) -> broadcast::Sender<ServerEvent>;

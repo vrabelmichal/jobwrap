@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use jobwrap_core::{JobId, JobState, Signal, WindowSize};
 
-use super::types::JobSummary;
+use super::types::{HelpProbeRequest, JobSummary};
 
 /// The version of the wire protocol.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -41,36 +41,86 @@ pub enum ClientToDaemon {
 
     // Job queries.
     ListJobs,
-    ShowJob { job_id: JobId },
-    GetOutput { job_id: JobId, sequence_start: u64 },
+    ShowJob {
+        job_id: JobId,
+    },
+    GetOutput {
+        job_id: JobId,
+        sequence_start: u64,
+    },
 
     // Control.
-    SendInput { job_id: JobId, data_base64: String },
-    SendSignal { job_id: JobId, signal: Signal },
+    SendInput {
+        job_id: JobId,
+        data_base64: String,
+    },
+    SendSignal {
+        job_id: JobId,
+        signal: Signal,
+    },
 
     // Wrapper output streaming.
-    Output { sequence: u64, data_base64: String },
+    Output {
+        sequence: u64,
+        data_base64: String,
+    },
 
     // Wrapper lifecycle/state reports (flat variants so the nested enums do
     // not collide on the `type` tag).
     WrapperReady,
     WrapperStopped,
     WrapperContinued,
-    WrapperExited { code: i32 },
-    WrapperSignaled { signal: Signal },
+    WrapperExited {
+        code: i32,
+    },
+    WrapperSignaled {
+        signal: Signal,
+    },
     WrapperTerminalLost,
     WrapperBye,
 
     // Local authentication management (CLI only, trusted socket).
     AuthStatus,
-    SetPassword { password: String },
+    SetPassword {
+        password: String,
+    },
     RemovePassword,
     TokenCreate(TokenCreateRequest),
     TokenList,
-    TokenRevoke { token_id: String },
+    TokenRevoke {
+        token_id: String,
+    },
 
     // Wrapper registration and lifecycle.
     RegisterJob(RegisterJob),
+
+    // Launch process from API / web / CLI (privileged).
+    LaunchJob(LaunchRequest),
+    // The `jobwrap attach-launch <launch-id>` helper retrieves the pending
+    // structured launch request from the daemon.
+    AttachLaunch {
+        launch_id: String,
+    },
+    // Documentation and help-probe operations.
+    IdentifyTarget {
+        target: String,
+    },
+    SearchManPages {
+        target: String,
+        section: Option<String>,
+    },
+    PreviewHelpProbe(HelpProbeRequest),
+    ExecuteHelpProbe {
+        preview_id: String,
+    },
+    GetHelpProbe {
+        probe_id: String,
+    },
+    DeleteHelpProbe {
+        probe_id: String,
+    },
+    ListTerminals,
+    RegisterTerminal(RegisterTerminal),
 }
 
 /// Request to create an API token.
@@ -80,6 +130,29 @@ pub struct TokenCreateRequest {
     pub scopes: Vec<String>,
     pub job_id: Option<JobId>,
     pub expires_at: Option<String>,
+}
+
+/// A launch request from the API or web interface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchRequest {
+    pub executable: String,
+    pub arguments: Vec<String>,
+    pub working_directory: Option<String>,
+    pub display_name: Option<String>,
+    pub profile_name: Option<String>,
+    pub idempotency_key: String,
+    pub terminal_target: jobwrap_core::TerminalTarget,
+}
+
+/// Terminal registration payload from the cooperative shell hook.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegisterTerminal {
+    pub terminal_id: String,
+    pub owner_uid: u32,
+    pub shell_type: Option<String>,
+    pub working_directory: Option<String>,
+    pub control_path: Option<String>,
+    pub ready: bool,
 }
 
 /// Job registration payload sent by the wrapper.
@@ -98,6 +171,7 @@ pub struct RegisterJob {
     pub working_directory: String,
     pub profile_name: String,
     pub profile: jobwrap_core::ProfileAccess,
+    pub record_output: bool,
     pub terminal_attached: bool,
     pub terminal_size: Option<WindowSize>,
     pub terminal_device: Option<String>,
@@ -172,6 +246,41 @@ pub enum DaemonToClient {
     },
     TokenRevoked {
         token_id: String,
+    },
+
+    /// A process was launched from the API.
+    Launched {
+        launch_id: String,
+        job_id: JobId,
+    },
+
+    /// The pending structured request for the `attach-launch` helper.
+    PendingLaunch {
+        request: LaunchRequest,
+        job_id: JobId,
+    },
+
+    // Documentation and help-probe responses.
+    TargetInfo {
+        info: super::types::TargetInfo,
+    },
+    ManPageSearch {
+        matches: Vec<super::types::ManPageMatch>,
+    },
+    ManPage {
+        page: Option<super::types::ManPage>,
+    },
+    ProbePreview {
+        preview: super::types::ProbePreview,
+    },
+    ProbeResult {
+        result: super::types::HelpProbeResult,
+    },
+    ProbeDeleted {
+        probe_id: String,
+    },
+    TerminalList {
+        terminals: Vec<super::types::TerminalInfo>,
     },
 
     /// Control messages directed at a wrapper connection.

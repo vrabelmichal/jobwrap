@@ -78,6 +78,7 @@ pub fn run_relay(
     }
 
     let stop = Arc::new(AtomicBool::new(false));
+    let child_alive = Arc::new(AtomicBool::new(true));
 
     // --- Reader: PTY master -> stdout + sink. ---
     let reader_stop = stop.clone();
@@ -128,6 +129,7 @@ pub fn run_relay(
     });
 
     // --- Commands from the daemon. ---
+    let command_child_alive = child_alive.clone();
     let command_handle = thread::Builder::new()
         .name("jw-commands".into())
         .spawn(move || {
@@ -137,7 +139,9 @@ pub fn run_relay(
                         let _ = write_all_raw(master_fd, &data);
                     }
                     DaemonCommand::Signal(signal) => {
-                        let _ = ffi::kill_process_group(child_pgid, ffi::signal_number(signal));
+                        if command_child_alive.load(Ordering::Acquire) {
+                            let _ = ffi::kill_process_group(child_pgid, ffi::signal_number(signal));
+                        }
                     }
                     DaemonCommand::Resize(ws) => {
                         let _ = ffi::set_window_size(master_fd, &ws);
@@ -215,6 +219,7 @@ pub fn run_relay(
             sink(change);
         }
     })?;
+    child_alive.store(false, Ordering::Release);
 
     // Drain any remaining child output before returning. The other threads
     // (stdin, signals, daemon commands) are deliberately not joined: the daemon
@@ -264,7 +269,17 @@ fn write_all_raw(fd: RawFd, buf: &[u8]) -> io::Result<()> {
         // SAFETY: write on a valid, open descriptor from a readable buffer.
         let n = unsafe { libc::write(fd, buf[written..].as_ptr().cast(), buf.len() - written) };
         if n < 0 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "write returned zero bytes",
+            ));
         }
         written += n as usize;
     }

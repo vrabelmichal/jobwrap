@@ -8,8 +8,9 @@ The user configuration lives at:
 
 `config_version = 1` is required. Unknown fields are rejected rather than
 silently ignored, especially authorization settings. `jobwrap config validate`
-reports issues; `jobwrap config explain <field>` shows where a resolved value
-came from.
+reports issues and the daemon refuses unsafe values. `jobwrap config explain
+<field>` shows where a profile access value came from. A missing file uses
+safe built-in defaults; a malformed existing file is never silently ignored.
 
 ## Reference
 
@@ -41,6 +42,30 @@ trust_local_owner = true
 browser_session_minutes = 720
 password_attempt_limit = 5
 password_attempt_window_seconds = 60
+
+[launch]
+enabled = false
+default_profile = "standard"
+default_terminal_mode = "new-terminal"
+require_preview = true
+require_idempotency_key = true
+maximum_concurrent_jobs = 20
+maximum_pending_launches = 20
+preview_lifetime_seconds = 300
+
+[terminal]
+preferred_backend = "gnome-terminal"
+allow_api_backend_selection = false
+
+[help]
+assume_help_available = false
+prefer_man_pages = true
+allow_interpreter_probes = false
+allow_script_probes = false
+default_probe_argument = "--help"
+probe_timeout_seconds = 3
+probe_output_limit_bytes = 1048576
+cache_results = true
 
 [profiles.standard]
 status = "public"
@@ -77,12 +102,23 @@ disabled       nobody
 `public output` is convenient but may itself contain secrets. Use the `private`
 profile for sensitive work.
 
-## Precedence
+## Resolution
 
 ```text
-built-in defaults < user configuration < named profile
-  < trusted project configuration < environment < command-line options
+built-in defaults < user configuration
 ```
+
+There is currently no project-configuration or environment-override layer.
+The wrapper's `--profile` option selects a named profile after loading the
+user configuration.
+
+## Safety limits
+
+The HTTP listener must be loopback. Use SSH forwarding or a local reverse
+proxy for remote access. Logs stop recording at 512 MiB per job by default and
+at 4 GiB total. Probe execution is opt-in and is only environment-limited, not
+an operating-system sandbox; do not enable target-executing probes for
+untrusted clients.
 
 ## XDG paths
 

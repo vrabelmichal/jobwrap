@@ -1,7 +1,6 @@
 //! jobwrap-config: TOML configuration models, defaults, profile resolution,
 //! precedence, validation, and provenance reporting.
 #![forbid(unsafe_code)]
-#![forbid(unsafe_code)]
 
 mod effective;
 mod error;
@@ -9,7 +8,10 @@ mod paths;
 mod raw;
 mod validate;
 
-pub use effective::{EffectiveConfig, EffectiveProfile, Layer, ValueSource, PROFILE_FIELDS};
+pub use effective::{
+    EffectiveConfig, EffectiveProfile, HelpConfig, LaunchConfig, Layer, TerminalConfig,
+    ValueSource, PROFILE_FIELDS,
+};
 pub use error::ConfigError;
 pub use paths::{ConfigPaths, RuntimePaths};
 pub use raw::{AuthenticationFile, DaemonFile, DefaultsFile, ProfileFile, RawConfig, ServerFile};

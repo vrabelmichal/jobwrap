@@ -8,8 +8,8 @@ use jobwrap_store::{parse_scope, StoredSession, StoredToken};
 use super::Registry;
 
 /// A window of password attempts for rate limiting.
-fn attempt_window() -> Duration {
-    Duration::seconds(60)
+fn attempt_window(seconds: u64) -> Duration {
+    Duration::seconds(i64::try_from(seconds).unwrap_or(i64::MAX))
 }
 
 /// Authentication operations on the registry.
@@ -64,7 +64,10 @@ impl<'a> AuthOps<'a> {
         {
             let mut attempts = self.registry.login_attempts.lock().expect("attempts lock");
             let now = Utc::now();
-            attempts.retain(|t| now.signed_duration_since(*t) < attempt_window());
+            attempts.retain(|t| {
+                now.signed_duration_since(*t)
+                    < attempt_window(config.password_attempt_window_seconds)
+            });
             if attempts.len() >= config.password_attempt_limit as usize {
                 return Err(jobwrap_web::ApiError::new(
                     jobwrap_protocol::ApiErrorCode::RateLimited,
@@ -88,10 +91,21 @@ impl<'a> AuthOps<'a> {
             expires_at: Utc::now() + Duration::minutes(config.browser_session_minutes as i64),
             user_label: "browser".to_string(),
         };
-        self.registry
-            .store
-            .lock()
-            .expect("store lock")
+        let store = self.registry.store.lock().expect("store lock");
+        store
+            .prune_expired_sessions(Utc::now())
+            .map_err(|e| jobwrap_web::ApiError::internal(e.to_string()))?;
+        if store
+            .session_count()
+            .map_err(|e| jobwrap_web::ApiError::internal(e.to_string()))?
+            >= 128
+        {
+            return Err(jobwrap_web::ApiError::new(
+                jobwrap_protocol::ApiErrorCode::RateLimited,
+                "too many active browser sessions",
+            ));
+        }
+        store
             .insert_session(&session)
             .map_err(|e| jobwrap_web::ApiError::internal(e.to_string()))?;
         Ok(raw)

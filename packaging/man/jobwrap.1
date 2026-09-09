@@ -23,7 +23,8 @@ A human-readable name for the job.
 The access profile to use (defaults to the configured profile).
 .TP
 .B \-\-detach
-Detach from the terminal and run in the background.
+Reserved for future use. This release returns an error before starting the
+command.
 .TP
 .B \-\-no-web
 Do not start or use the web server.
@@ -79,7 +80,7 @@ SQLite database.
 Append-only terminal logs.
 .SH SECURITY
 See \fI/usr/share/doc/jobwrap/README.md\fR and the security model. The daemon
-binds to loopback by default and never creates arbitrary processes.
+is restricted to loopback. Daemon/API process creation is disabled by default.
 .SH SEE ALSO
 .BR jobwrapd (8),
 .BR jobwrap.toml (5)

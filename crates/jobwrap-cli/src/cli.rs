@@ -7,8 +7,24 @@ use clap::{Args, Parser, Subcommand};
 
 /// The subcommand names that take priority over wrapper mode.
 pub const RESERVED_SUBCOMMANDS: &[&str] = &[
-    "list", "show", "logs", "attach", "signal", "stop", "open", "daemon", "config", "auth",
-    "token", "version", "help",
+    "wrap",
+    "list",
+    "show",
+    "logs",
+    "attach",
+    "signal",
+    "stop",
+    "open",
+    "daemon",
+    "config",
+    "auth",
+    "token",
+    "launch",
+    "attach-launch",
+    "inspect",
+    "terminals",
+    "version",
+    "help",
 ];
 
 #[derive(Debug, Parser)]
@@ -67,6 +83,15 @@ pub enum Command {
         #[command(subcommand)]
         action: TokenCommand,
     },
+    /// Launch a managed process from the API (local trusted).
+    Launch(LaunchArgs),
+    /// Attach the one-time launch helper (used by the daemon's terminal
+    /// backends; not for interactive use).
+    AttachLaunch { launch_id: String },
+    /// Inspect a target's static metadata and man pages.
+    Inspect { target: String },
+    /// List registered terminals.
+    Terminals,
 }
 
 #[derive(Debug, Subcommand)]
@@ -123,6 +148,28 @@ pub struct TokenCreateArgs {
     pub job_id: Option<String>,
     #[arg(long, value_name = "RFC3339")]
     pub expires_at: Option<String>,
+}
+
+/// Arguments for launching a command via the daemon.
+#[derive(Debug, Clone, Args)]
+pub struct LaunchArgs {
+    pub executable: String,
+    #[arg(num_args = 0.., value_name = "ARG", allow_hyphen_values = true)]
+    pub arguments: Vec<String>,
+    #[arg(long)]
+    pub working_directory: Option<String>,
+    #[arg(long, short)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub profile: Option<String>,
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
+    /// Terminal mode: managed | new_terminal | existing_terminal.
+    #[arg(long)]
+    pub terminal: Option<String>,
+    /// Terminal id for existing_terminal mode.
+    #[arg(long)]
+    pub terminal_id: Option<String>,
 }
 
 /// Arguments for wrapping a command.

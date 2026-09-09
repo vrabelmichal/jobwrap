@@ -23,6 +23,15 @@ The jobwrap configuration lives at \fI~/.config/jobwrap/config.toml\fR.
 \fBtrust_local_owner\fR, \fBbrowser_session_minutes\fR,
 \fBpassword_attempt_limit\fR, \fBpassword_attempt_window_seconds\fR.
 .TP
+.B [launch]
+Daemon/API launches are disabled by default. The safe supported path remains
+\fBjobwrap COMMAND\fR. Managed and existing-terminal API launch modes are not
+available in this release.
+.TP
+.B [help]
+Executable and interpreter probes are disabled by default. Enabled probes are
+time/output limited but are not an operating-system sandbox.
+.TP
 .B [profiles.NAME]
 Access fields: \fBstatus\fR, \fBoutput\fR, \fBcommand\fR,
 \fBworking_directory\fR, \fBsend_input\fR, \fBsignal_interrupt\fR,
@@ -46,7 +55,8 @@ Nobody.
 Public output may itself contain secrets; use the private profile for
 sensitive work.
 .SH PRECEDENCE
-Built-in defaults, user configuration, named profile, trusted project
-configuration, environment, then command-line options.
+Built-in defaults, then the user configuration. Command-line \fB\-\-profile\fR
+selects a named access profile. Project and environment layers are not yet
+implemented.
 .SH SEE ALSO
 .BR jobwrap (1)

@@ -8,6 +8,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
 use jobwrap_core::JobId;
 
 /// Limits applied to output logging.
@@ -50,8 +53,13 @@ impl OutputLog {
 
     /// Open an existing log for reading.
     pub fn open(dir: &Path, job_id: JobId) -> std::io::Result<Self> {
+        validate_log_dir(dir)?;
         let path = Self::path_for(dir, job_id);
-        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NOFOLLOW);
+        let file = options.open(&path)?;
         let bytes_written = file.metadata()?.len();
         Ok(Self {
             file,
@@ -62,16 +70,19 @@ impl OutputLog {
         })
     }
 
-    /// Create (or truncate) a log for writing.
+    /// Create a new log for writing. Existing paths are never truncated and
+    /// symlinks are rejected, even if a caller supplies a colliding job id.
     pub fn create(dir: &Path, job_id: JobId, limits: LogLimits) -> std::io::Result<Self> {
         std::fs::create_dir_all(dir)?;
+        validate_log_dir(dir)?;
+        #[cfg(unix)]
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         let path = Self::path_for(dir, job_id);
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).read(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        let file = options.open(&path)?;
         Ok(Self {
             file,
             path,
@@ -135,6 +146,9 @@ impl Read for OutputLog {
 
 /// Sum the sizes of all `.terminal` files in a directory.
 pub fn total_log_bytes(dir: &Path) -> u64 {
+    if validate_log_dir(dir).is_err() {
+        return 0;
+    }
     let mut total = 0u64;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -150,10 +164,37 @@ pub fn total_log_bytes(dir: &Path) -> u64 {
 }
 
 /// Delete a job's log file. Returns the number of bytes freed.
-pub fn delete_log(dir: &Path, job_id: JobId) -> u64 {
+pub fn delete_log(dir: &Path, job_id: JobId) -> std::io::Result<u64> {
+    match validate_log_dir(dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    }
     let path = OutputLog::path_for(dir, job_id);
-    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(dir.join(format!("{job_id}.index")));
-    size
+    let size = std::fs::symlink_metadata(&path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if let Err(error) = std::fs::remove_file(&path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(error);
+        }
+    }
+    let index = dir.join(format!("{job_id}.index"));
+    if let Err(error) = std::fs::remove_file(index) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(error);
+        }
+    }
+    Ok(size)
+}
+
+fn validate_log_dir(dir: &Path) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(dir)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "log directory must be a real directory, not a symlink",
+        ));
+    }
+    Ok(())
 }

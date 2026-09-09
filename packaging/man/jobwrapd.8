@@ -7,8 +7,8 @@ jobwrapd \- the per-user jobwrap daemon
 .SH DESCRIPTION
 \fBjobwrapd\fR is the per-user daemon that provides the web interface, HTTP
 API, authentication, job registry, log storage, and access control for
-jobwrap. It runs as the invoking user, never as root, and never creates
-arbitrary processes.
+jobwrap. It runs as the invoking user, never as root. Experimental daemon/API
+launch and help-probe features are disabled by default.
 .PP
 It is normally started automatically by \fBjobwrap\fR, or through the user
 systemd units. It binds an HTTP listener to loopback and listens on a private

@@ -52,7 +52,7 @@ fn check_csrf(headers: &HeaderMap) -> Result<(), ApiError> {
         return Ok(()); // Non-browser clients (curl, tokens) have no Origin.
     };
     let expected = service_base_origin(headers);
-    if origin == expected || origin.ends_with("127.0.0.1") || origin.ends_with("localhost") {
+    if origin == expected {
         Ok(())
     } else {
         Err(ApiError::permission_denied("cross-origin request rejected"))
@@ -168,7 +168,9 @@ pub async fn login(
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Response {
-    check_csrf(&headers).ok();
+    if let Err(error) = check_csrf(&headers) {
+        return error.into_response();
+    }
     let service = service(&state);
     match service.login(&req.password) {
         Ok(session_token) => {
@@ -181,14 +183,14 @@ pub async fn login(
                 .insert(axum::http::header::SET_COOKIE, parsed);
             response
         }
-        Err(e) => {
-            let body = Json(json!({ "error": e.message, "code": e.code.as_str() }));
-            (StatusCode::UNAUTHORIZED, body).into_response()
-        }
+        Err(e) => e.into_response(),
     }
 }
 
 pub async fn logout(State(state): State<RouterState>, headers: HeaderMap) -> Response {
+    if let Err(error) = check_csrf(&headers) {
+        return error.into_response();
+    }
     let service = service(&state);
     let session = cookie_value(&headers, SESSION_COOKIE);
     if let Some(session) = session {
@@ -222,10 +224,7 @@ fn summarize_record(record: &jobwrap_core::JobRecord) -> serde_json::Value {
         "profile": record.profile_name,
         "started_at": record.started_at.to_rfc3339(),
         "finished_at": record.finished_at.map(|t| t.to_rfc3339()),
-        "command": record.command.as_str(),
-        "working_directory": record.working_directory.display().to_string(),
         "terminal_attached": record.terminal.attached,
-        "owner_uid": record.owner_uid,
     })
 }
 
@@ -314,9 +313,180 @@ pub async fn delete_job(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Request body for POST /api/v1/launch.
+#[derive(Debug, Deserialize)]
+pub struct ApiLaunchRequest {
+    pub executable: String,
+    pub arguments: Option<Vec<String>>,
+    pub working_directory: Option<String>,
+    pub display_name: Option<String>,
+    pub profile_name: Option<String>,
+    pub idempotency_key: Option<String>,
+    pub terminal_target: Option<jobwrap_core::TerminalTarget>,
+}
+
+pub async fn launch_job(
+    State(state): State<RouterState>,
+    headers: HeaderMap,
+    Json(req): Json<ApiLaunchRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check_csrf(&headers)?;
+    let principal = principal_from_headers(service(&state), &headers);
+    let key = req
+        .idempotency_key
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("idempotency_key is required for process creation"))?;
+    if key.is_empty() || key.len() > 128 {
+        return Err(ApiError::bad_request(
+            "idempotency_key must contain 1 to 128 characters",
+        ));
+    }
+    let launch_req = jobwrap_protocol::LaunchRequest {
+        executable: req.executable,
+        arguments: req.arguments.unwrap_or_default(),
+        working_directory: req.working_directory,
+        display_name: req.display_name,
+        profile_name: req.profile_name,
+        idempotency_key: key,
+        terminal_target: req.terminal_target.unwrap_or_default(),
+    };
+    let (launch_id, job_id) = state.service.launch(&principal, launch_req)?;
+    Ok(Json(json!({
+        "launch_id": launch_id,
+        "job_id": job_id.to_string(),
+        "state": "running",
+    })))
+}
+
 fn parse_signal(raw: &str) -> Result<Signal, ApiError> {
     raw.parse()
         .map_err(|_| ApiError::bad_request(format!("unknown signal `{raw}`")))
+}
+
+// ---- Documentation ----
+
+#[derive(Debug, Deserialize)]
+pub struct TargetRequest {
+    target: String,
+}
+
+pub async fn identify_target(
+    State(state): State<RouterState>,
+    headers: HeaderMap,
+    Json(req): Json<TargetRequest>,
+) -> Result<Json<jobwrap_protocol::TargetInfo>, ApiError> {
+    let principal = principal_from_headers(service(&state), &headers);
+    let info = state.service.identify_target(&principal, &req.target)?;
+    Ok(Json(info))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ManSearchRequest {
+    target: String,
+}
+
+pub async fn search_man_pages(
+    State(state): State<RouterState>,
+    headers: HeaderMap,
+    Json(req): Json<ManSearchRequest>,
+) -> Result<Json<Vec<jobwrap_protocol::ManPageMatch>>, ApiError> {
+    let principal = principal_from_headers(service(&state), &headers);
+    let matches = state.service.search_man_pages(&principal, &req.target)?;
+    Ok(Json(matches))
+}
+
+pub async fn fetch_man_page(
+    State(state): State<RouterState>,
+    Path((name, section)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Option<jobwrap_protocol::ManPage>>, ApiError> {
+    let principal = principal_from_headers(service(&state), &headers);
+    let page = state
+        .service
+        .fetch_man_page(&principal, &name, Some(section))?;
+    Ok(Json(page))
+}
+
+// ---- Help probes ----
+
+#[derive(Debug, Deserialize)]
+pub struct ProbeRequest {
+    target: String,
+    probe_argument: Option<String>,
+    kind: String,
+    idempotency_key: Option<String>,
+}
+
+pub async fn preview_help_probe(
+    State(state): State<RouterState>,
+    headers: HeaderMap,
+    Json(req): Json<ProbeRequest>,
+) -> Result<Json<jobwrap_protocol::ProbePreview>, ApiError> {
+    check_csrf(&headers)?;
+    let principal = principal_from_headers(service(&state), &headers);
+    let kind = match req.kind.as_str() {
+        "interpreter" => jobwrap_protocol::HelpProbeKind::Interpreter,
+        "executable" => jobwrap_protocol::HelpProbeKind::Executable,
+        "script" => jobwrap_protocol::HelpProbeKind::Script,
+        "custom" => jobwrap_protocol::HelpProbeKind::Custom,
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "unknown probe kind `{other}`"
+            )))
+        }
+    };
+    let key = req.idempotency_key.unwrap_or_default();
+    let probe_req = jobwrap_protocol::HelpProbeRequest {
+        target: req.target,
+        probe_argument: req.probe_argument,
+        kind,
+        idempotency_key: key,
+    };
+    let preview = state.service.preview_help_probe(&principal, probe_req)?;
+    Ok(Json(preview))
+}
+
+pub async fn execute_help_probe(
+    State(state): State<RouterState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<jobwrap_protocol::HelpProbeResult>, ApiError> {
+    check_csrf(&headers)?;
+    let principal = principal_from_headers(service(&state), &headers);
+    let result = state.service.execute_help_probe(&principal, &id)?;
+    Ok(Json(result))
+}
+
+pub async fn get_help_probe(
+    State(state): State<RouterState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Option<jobwrap_protocol::HelpProbeResult>>, ApiError> {
+    let principal = principal_from_headers(service(&state), &headers);
+    let result = state.service.get_help_probe(&principal, &id)?;
+    Ok(Json(result))
+}
+
+pub async fn delete_help_probe(
+    State(state): State<RouterState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    check_csrf(&headers)?;
+    let principal = principal_from_headers(service(&state), &headers);
+    let _ = state.service.delete_help_probe(&principal, &id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---- Terminals ----
+
+pub async fn list_terminals(
+    State(state): State<RouterState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<jobwrap_protocol::TerminalInfo>>, ApiError> {
+    let principal = principal_from_headers(service(&state), &headers);
+    let terminals = state.service.list_terminals(&principal);
+    Ok(Json(terminals))
 }
 
 // ---- WebSocket ----
@@ -327,18 +497,25 @@ pub async fn job_ws(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
+    check_csrf(&headers)?;
     let id = job_id(&id)?;
     let principal = principal_from_headers(service(&state), &headers);
-    // Authorize viewing this job's output before upgrading.
-    let _ = state.service.get_job(&principal, id)?;
+    // Output authorization is intentionally stronger than status access.
+    let _ = state.service.get_output(&principal, id, u64::MAX)?;
+    let permit = state
+        .websocket_limit
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ApiError::conflict("too many live terminal connections"))?;
     let broadcast = state.service.broadcast();
-    Ok(ws.on_upgrade(move |socket| ws_loop(socket, id, broadcast)))
+    Ok(ws.on_upgrade(move |socket| ws_loop(socket, id, broadcast, permit)))
 }
 
 async fn ws_loop(
     mut socket: WebSocket,
     job_id: JobId,
     broadcast: tokio::sync::broadcast::Sender<ServerEvent>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let mut rx = broadcast.subscribe();
     loop {

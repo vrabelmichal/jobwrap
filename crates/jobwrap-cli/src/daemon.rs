@@ -123,6 +123,9 @@ pub fn connect_wrapper_stream(
             if protocol_version != PROTOCOL_VERSION {
                 return Err(ClientError::VersionRejected);
             }
+            // Wrapper connections are long lived; an idle control channel is
+            // normal and must not silently expire after the request timeout.
+            read.set_read_timeout(None)?;
             Ok((read, write, daemon_pid))
         }
         DaemonToClient::Error { message, .. } => Err(ClientError::Daemon(message)),
@@ -162,6 +165,15 @@ fn protocol_tag(msg: &DaemonToClient) -> &'static str {
         DaemonToClient::TokenCreated { .. } => "token_created",
         DaemonToClient::TokenList { .. } => "token_list",
         DaemonToClient::TokenRevoked { .. } => "token_revoked",
+        DaemonToClient::Launched { .. } => "launched",
+        DaemonToClient::PendingLaunch { .. } => "pending_launch",
+        DaemonToClient::TargetInfo { .. } => "target_info",
+        DaemonToClient::ManPageSearch { .. } => "man_page_search",
+        DaemonToClient::ManPage { .. } => "man_page",
+        DaemonToClient::ProbePreview { .. } => "probe_preview",
+        DaemonToClient::ProbeResult { .. } => "probe_result",
+        DaemonToClient::ProbeDeleted { .. } => "probe_deleted",
+        DaemonToClient::TerminalList { .. } => "terminal_list",
         DaemonToClient::ToWrapper(_) => "to_wrapper",
     }
 }
@@ -169,6 +181,7 @@ fn protocol_tag(msg: &DaemonToClient) -> &'static str {
 fn connect_socket(path: &Path) -> std::io::Result<UnixStream> {
     let stream = UnixStream::connect(path)?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     Ok(stream)
 }
 

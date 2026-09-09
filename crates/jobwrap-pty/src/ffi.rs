@@ -9,7 +9,7 @@
 //!   into `amaster`/`aslave` only when it returns 0. We hand ownership of each
 //!   descriptor to an `OwnedFd` (closing it on drop), so no descriptor leaks
 //!   and no double-close is possible.
-//! * [`ioctl`] helpers — the ioctl targets are the well-known `TIOC*` codes for
+//! * `ioctl` helpers — the ioctl targets are the well-known `TIOC*` codes for
 //!   termios/window-size; the passed pointers point to stack-local storage of
 //!   the exact type the kernel expects for those codes.
 //! * [`fork_exec`] — only called before any threads exist, so async-signal

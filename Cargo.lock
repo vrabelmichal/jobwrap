@@ -747,6 +747,7 @@ dependencies = [
  "nix",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tower",
@@ -785,6 +786,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "jobwrap-core",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

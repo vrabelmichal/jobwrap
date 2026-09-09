@@ -29,8 +29,8 @@ Stable error codes: `bad_request`, `unauthorized`, `permission_denied`,
 | GET    | `/api/v1/server`              | version, auth required, bind   |
 | GET    | `/api/v1/auth`                | current session state          |
 | GET    | `/api/v1/jobs`                | job summaries visible to you   |
-| GET    | `/api/v1/jobs/{job_id}`       | full record                    |
-| GET    | `/api/v1/jobs/{job_id}/output`| terminal bytes (`data_base64`) |
+| GET    | `/api/v1/jobs/{job_id}`       | non-sensitive status detail    |
+| GET    | `/api/v1/jobs/{job_id}/output?from=N`| up to 1 MiB from byte offset N (`data_base64`) |
 | GET    | `/api/v1/jobs/{job_id}/events`| state transition history       |
 
 ## Control endpoints
@@ -43,7 +43,7 @@ Stable error codes: `bad_request`, `unauthorized`, `permission_denied`,
 | POST   | `/api/v1/jobs/{job_id}/signals/stop`    | SIGSTOP           |
 | POST   | `/api/v1/jobs/{job_id}/signals/continue`| SIGCONT           |
 | POST   | `/api/v1/jobs/{job_id}/signals/kill`    | SIGKILL           |
-| DELETE | `/api/v1/jobs/{job_id}`                 | delete record     |
+| DELETE | `/api/v1/jobs/{job_id}`                 | delete a finished record and log |
 
 Only named signals are exposed; arbitrary numeric signals are not.
 
@@ -51,6 +51,24 @@ Only named signals are exposed; arbitrary numeric signals are not.
 
 `GET /api/v1/jobs/{job_id}/ws` streams live output and state changes after the
 connection is authorized.
+
+Live output requires output permission, not merely status permission. At most
+128 live WebSockets are accepted by one daemon.
+
+## Experimental launch and documentation endpoints
+
+`POST /api/v1/launch` requires an explicit `idempotency_key`. Process creation
+is disabled by default. With `[launch] enabled = true`, the default
+`require_preview = true` still fails closed because launch previews are not yet
+implemented. If an owner explicitly sets `require_preview = false`, only
+`new_terminal` mode is available; managed and existing-terminal modes return
+an error without starting a process.
+
+Static inspection is available through
+`POST /api/v1/documentation/identify` and the man-page endpoints. Identification
+reads at most 8 KiB of a regular target. Man commands have output/time limits.
+Help-probe preview/execution endpoints exist but probes are disabled by default
+and are not an OS security sandbox.
 
 Server -> client:
 

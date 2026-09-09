@@ -49,11 +49,11 @@ fn run_dispatch() -> i32 {
         Err(err) => {
             eprintln!("error: {err:#}");
             eprintln!();
-            if let Some(word) = first_word.as_deref() {
+            if !wants_subcommand {
+                let word = first_word.as_deref().unwrap_or("COMMAND");
                 eprintln!("If you intended to run a command called `{word}`, use:");
                 eprintln!("  jobwrap -- {word}...");
             }
-            eprintln!("If the command is still running, it remains attached to this terminal.");
             1
         }
     }
