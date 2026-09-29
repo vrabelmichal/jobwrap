@@ -41,7 +41,7 @@ struct ProcessSnapshot {
     current_working_directory: Option<String>,
 }
 
-pub async fn get_job_details(
+pub(crate) async fn get_job_details(
     State(state): State<RouterState>,
     Path(id): Path<String>,
     headers: HeaderMap,
@@ -80,7 +80,7 @@ fn details_response(record: &JobRecord, principal: &Principal) -> Value {
         "working_directory": working_directory,
         "terminal": {
             "attached": record.terminal.attached,
-            "device": record.terminal.device,
+            "device": record.terminal.device.as_deref(),
             "initial_size": record.terminal.initial_size,
         },
         "log": {
@@ -129,8 +129,9 @@ fn process_snapshot(
         u64::try_from(entries.filter_map(Result::ok).count()).ok()
     });
 
+    let cmdline_path = format!("{base}/cmdline");
     let current_command = include_command
-        .then(|| read_cmdline(FsPath::new(&format!("{base}/cmdline"))))
+        .then(|| read_cmdline(FsPath::new(&cmdline_path)))
         .flatten();
     let current_executable = include_command
         .then(|| fs::read_link(format!("{base}/exe")).ok())
@@ -191,16 +192,18 @@ fn parse_job_id(raw: &str) -> Result<JobId, ApiError> {
 fn status_field<'a>(status: &'a str, key: &str) -> Option<&'a str> {
     status.lines().find_map(|line| {
         let (name, value) = line.split_once(':')?;
-        (name == key).then(|| value.trim())
+        (name == key).then_some(value.trim())
     })
 }
 
 fn named_counter(text: &str, key: &str) -> Option<u64> {
     text.lines().find_map(|line| {
         let (name, value) = line.split_once(':')?;
-        (name == key)
-            .then(|| value.trim().parse::<u64>().ok())
-            .flatten()
+        if name == key {
+            value.trim().parse::<u64>().ok()
+        } else {
+            None
+        }
     })
 }
 
