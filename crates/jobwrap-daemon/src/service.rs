@@ -91,6 +91,36 @@ impl JobService for DaemonService {
             .map_err(|e| ApiError::new(jobwrap_protocol::ApiErrorCode::PermissionDenied, e))
     }
 
+    fn launch_capabilities(&self) -> jobwrap_web::service::LaunchCapabilities {
+        let config = &self.registry.config;
+        let preferred = config.terminal.preferred_backend.clone();
+        let backend_available = crate::terminal::resolve_backend(&preferred).available();
+        let backends = if config.terminal.allow_api_backend_selection {
+            ["gnome-terminal", "xterm"]
+                .iter()
+                .map(|candidate| {
+                    (
+                        candidate.to_string(),
+                        crate::terminal::resolve_backend(candidate).available(),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        jobwrap_web::service::LaunchCapabilities {
+            enabled: config.launch.enabled,
+            require_preview: config.launch.require_preview,
+            profiles: config.profiles.keys().cloned().collect(),
+            default_profile: config.launch.default_profile.clone(),
+            default_terminal_mode: config.launch.default_terminal_mode.clone(),
+            preferred_backend: preferred,
+            backend_available,
+            allow_backend_selection: config.terminal.allow_api_backend_selection,
+            backends,
+        }
+    }
+
     fn identify_target(
         &self,
         principal: &Principal,
