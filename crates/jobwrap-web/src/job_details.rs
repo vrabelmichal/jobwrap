@@ -60,8 +60,8 @@ fn details_response(record: &JobRecord, principal: &Principal) -> Value {
     let command = view_command.then(|| record.command.as_str().to_string());
     let executable = view_command.then(|| record.executable.to_string_lossy().into_owned());
     let arguments = view_command.then(|| record.arguments.clone());
-    let working_directory = view_working_directory
-        .then(|| record.working_directory.to_string_lossy().into_owned());
+    let working_directory =
+        view_working_directory.then(|| record.working_directory.to_string_lossy().into_owned());
     let process = process_snapshot(record, view_command, view_working_directory);
 
     json!({
@@ -125,9 +125,9 @@ fn process_snapshot(
     let status = fs::read_to_string(format!("{base}/status")).ok()?;
     let io_text = fs::read_to_string(format!("{base}/io")).ok();
 
-    let open_file_descriptors = fs::read_dir(format!("{base}/fd")).ok().and_then(|entries| {
-        u64::try_from(entries.filter_map(Result::ok).count()).ok()
-    });
+    let open_file_descriptors = fs::read_dir(format!("{base}/fd"))
+        .ok()
+        .and_then(|entries| u64::try_from(entries.filter_map(Result::ok).count()).ok());
 
     let cmdline_path = format!("{base}/cmdline");
     let current_command = include_command
@@ -185,8 +185,7 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
 }
 
 fn parse_job_id(raw: &str) -> Result<JobId, ApiError> {
-    raw.parse()
-        .map_err(|_| ApiError::not_found("no such job"))
+    raw.parse().map_err(|_| ApiError::not_found("no such job"))
 }
 
 fn status_field<'a>(status: &'a str, key: &str) -> Option<&'a str> {
