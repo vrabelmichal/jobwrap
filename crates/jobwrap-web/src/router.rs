@@ -7,6 +7,7 @@ use axum::routing::{get, post};
 use axum::Router;
 
 use crate::handlers;
+use crate::job_details;
 use crate::service::JobService;
 
 /// The shared router state.
@@ -49,6 +50,10 @@ pub fn build_router(service: Arc<dyn JobService>) -> Router {
         .route(
             "/api/v1/jobs/:id",
             get(handlers::get_job).delete(handlers::delete_job),
+        )
+        .route(
+            "/api/v1/jobs/:id/details",
+            get(job_details::get_job_details),
         )
         .route("/api/v1/jobs/:id/output", get(handlers::get_output))
         .route("/api/v1/jobs/:id/events", get(handlers::get_events))

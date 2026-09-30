@@ -7,6 +7,7 @@ pub mod assets;
 pub mod error;
 pub mod events;
 pub mod handlers;
+mod job_details;
 pub mod router;
 pub mod service;
 

@@ -14,6 +14,10 @@ All notable changes to jobwrap are documented in this file.
   terminal's wrapper has registered the job. When daemon-side creation is
   disabled or fails closed (`[launch] enabled`, `require_preview`), the page
   shows the responsible configuration instead of the form.
+- The job details page now shows the recorded command, launch metadata, process
+  identifiers, terminal/log metadata, and a permission-aware live Linux
+  process snapshot (state, PPID, threads, memory, open file descriptors, and
+  disk I/O) from `/proc`.
 - `jobwrap daemon start --foreground` runs the daemon attached to the
   current terminal (Ctrl+C stops it) instead of in the background.
 - `jobwrap daemon start` prints the web interface URL after starting.
@@ -43,6 +47,13 @@ All notable changes to jobwrap are documented in this file.
   of a hardcoded `http://127.0.0.1:8765`, so changing `server.port` no
   longer leaves `jobwrap daemon start`, `jobwrap open`, and related URLs
   pointing at the old port. An explicitly configured value is still kept.
+
+### Changed
+
+- The job details page is reorganized into overview, process, command,
+  terminal-output, and signal-control sections. The browser's live-output
+  connection is labeled separately from the job state instead of appearing as
+  an unexplained `disconnected` status.
 
 ## [0.1.0] - 2026-08-01
 
