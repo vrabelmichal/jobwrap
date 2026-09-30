@@ -16,6 +16,41 @@ pub struct ServerInfo {
     pub port: u16,
 }
 
+/// What the daemon currently permits for daemon-side process creation.
+///
+/// This reports configuration state, not a grant: every launch is still
+/// authorized when it is requested.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchCapabilities {
+    /// `[launch] enabled` — daemon/API process creation is opt-in.
+    pub enabled: bool,
+    /// `require_preview` is set, but launch previews are not implemented, so
+    /// every launch fails closed until the owner relaxes it.
+    pub require_preview: bool,
+    /// Configured profile names available for new jobs.
+    pub profiles: Vec<String>,
+    /// The default profile for new jobs.
+    pub default_profile: String,
+    /// The configured default terminal mode.
+    pub default_terminal_mode: String,
+    /// The configured preferred terminal backend identifier.
+    pub preferred_backend: String,
+    /// Whether the preferred backend emulator binary is installed.
+    pub backend_available: bool,
+    /// Whether web/API clients may choose among configured backends.
+    pub allow_backend_selection: bool,
+    /// Backend identifiers with availability, populated when selection is
+    /// allowed.
+    pub backends: Vec<(String, bool)>,
+}
+
+impl LaunchCapabilities {
+    /// Whether the new-job form can offer working launches right now.
+    pub fn launch_ready(&self) -> bool {
+        self.enabled && !self.require_preview
+    }
+}
+
 /// The set of operations the HTTP/WS layer can perform against the daemon.
 pub trait JobService: Send + Sync {
     /// Resolve a request's credentials into a principal.
@@ -64,6 +99,9 @@ pub trait JobService: Send + Sync {
         principal: &Principal,
         req: jobwrap_protocol::LaunchRequest,
     ) -> Result<(String, JobId), ApiError>;
+
+    /// Report daemon-side process-creation capabilities for UI rendering.
+    fn launch_capabilities(&self) -> LaunchCapabilities;
 
     // ---- documentation ----
 

@@ -92,6 +92,13 @@ pub async fn jobs_index(State(state): State<RouterState>, headers: HeaderMap) ->
     index(State(state), headers).await
 }
 
+pub async fn new_job_page(State(state): State<RouterState>, headers: HeaderMap) -> Response {
+    let principal = principal_from_headers(service(&state), &headers);
+    let authenticated = !matches!(principal, Principal::Anonymous);
+    let capabilities = state.service.launch_capabilities();
+    render(assets::new_job_page(&capabilities, authenticated))
+}
+
 pub async fn login_page() -> Response {
     render(assets::login_page())
 }

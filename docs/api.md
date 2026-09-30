@@ -64,6 +64,11 @@ implemented. If an owner explicitly sets `require_preview = false`, only
 `new_terminal` mode is available; managed and existing-terminal modes return
 an error without starting a process.
 
+The web interface exposes the same launch path to logged-in users through a
+form page at `/jobs/new` (linked from the jobs list). When creation is
+disabled or fails closed, the page shows the responsible configuration
+instead of the form.
+
 Static inspection is available through
 `POST /api/v1/documentation/identify` and the man-page endpoints. Identification
 reads at most 8 KiB of a regular target. Man commands have output/time limits.

@@ -13,4 +13,4 @@ pub mod service;
 pub use error::{ApiError, HttpError};
 pub use events::ServerEvent;
 pub use router::{build_router, RouterState};
-pub use service::{JobService, ServerInfo};
+pub use service::{JobService, LaunchCapabilities, ServerInfo};

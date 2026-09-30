@@ -35,6 +35,7 @@ pub fn build_router(service: Arc<dyn JobService>) -> Router {
     Router::new()
         .route("/", get(handlers::index))
         .route("/jobs", get(handlers::jobs_index))
+        .route("/jobs/new", get(handlers::new_job_page))
         .route("/jobs/:id", get(handlers::job_page))
         .route("/login", get(handlers::login_page))
         .route("/static/app.js", get(handlers::app_js))

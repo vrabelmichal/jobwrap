@@ -122,7 +122,10 @@ untrusted clients.
 
 When launch is enabled, idempotency keys remain mandatory and only the
 `new-terminal` mode with the `gnome-terminal` or `xterm` backend is supported.
-Managed and existing-terminal launch modes fail closed. The
+Managed and existing-terminal launch modes fail closed. The web interface
+offers a "new job" page at `/jobs/new` that uses the same launch API; when
+creation is disabled or fails closed it explains exactly which settings are
+responsible instead of showing a form. The
 `retain_completed_days` setting is reserved for future retention support;
 completed records are currently removed only with an explicit delete command.
 
