@@ -77,6 +77,66 @@ port = 9000
     }
 
     #[test]
+    fn public_base_url_derives_from_bind_and_port() {
+        let text = r#"
+config_version = 1
+[server]
+bind = "127.0.0.1"
+port = 9000
+"#;
+        let cfg = parse(text).expect("parses");
+        assert_eq!(cfg.server.public_base_url, "http://127.0.0.1:9000");
+    }
+
+    #[test]
+    fn public_base_url_resolves_loopback_alias() {
+        let text = r#"
+config_version = 1
+[server]
+bind = "loopback"
+port = 9000
+"#;
+        let cfg = parse(text).expect("parses");
+        assert_eq!(cfg.server.public_base_url, "http://127.0.0.1:9000");
+    }
+
+    #[test]
+    fn public_base_url_uses_tailscale_placeholder() {
+        let text = r#"
+config_version = 1
+[server]
+bind = "tailscale"
+port = 9000
+"#;
+        let cfg = parse(text).expect("parses");
+        assert_eq!(cfg.server.public_base_url, "http://tailscale:9000");
+    }
+
+    #[test]
+    fn public_base_url_uses_the_first_target() {
+        let text = r#"
+config_version = 1
+[server]
+bind = "loopback,tailscale"
+port = 9000
+"#;
+        let cfg = parse(text).expect("parses");
+        assert_eq!(cfg.server.public_base_url, "http://127.0.0.1:9000");
+    }
+
+    #[test]
+    fn explicit_public_base_url_is_kept() {
+        let text = r#"
+config_version = 1
+[server]
+port = 9000
+public_base_url = "https://jobs.example.com"
+"#;
+        let cfg = parse(text).expect("parses");
+        assert_eq!(cfg.server.public_base_url, "https://jobs.example.com");
+    }
+
+    #[test]
     fn unknown_top_level_field_rejected() {
         let text = "config_version = 1\nunknown_field = 1\n";
         assert!(parse(text).is_err());

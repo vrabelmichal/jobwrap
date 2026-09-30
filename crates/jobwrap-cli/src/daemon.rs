@@ -3,7 +3,7 @@
 //! Connects over the private Unix socket, auto-starting the daemon when
 //! needed, and verifying the socket peer's UID before trusting it.
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::thread;
@@ -13,6 +13,9 @@ use jobwrap_config::RuntimePaths;
 use jobwrap_protocol::{codec, ClientToDaemon, DaemonToClient, Hello, HelloRole, PROTOCOL_VERSION};
 use nix::sys::socket::{self, sockopt};
 use nix::unistd::Uid;
+
+/// How much of the daemon's output to include in a startup error.
+const LOG_TAIL_BYTES: usize = 2048;
 
 /// A connection to the daemon for request/response traffic (CLI subcommands).
 pub struct DaemonClient {
@@ -25,6 +28,8 @@ pub struct DaemonClient {
 pub enum ClientError {
     #[error("could not connect to the jobwrap daemon: {0}")]
     Connect(#[from] std::io::Error),
+    #[error("failed to start jobwrapd: {0}")]
+    Startup(String),
     #[error("the daemon socket is owned by UID {owner}, but the current UID is {current}; refusing to connect")]
     PeerUidMismatch { owner: u32, current: u32 },
     #[error("protocol error: {0}")]
@@ -228,6 +233,9 @@ pub(crate) fn find_daemon_binary() -> Option<std::path::PathBuf> {
 }
 
 /// Start the daemon, guarding against concurrent starts with the daemon lock.
+///
+/// The daemon's stderr is captured in `daemon.log` under the runtime
+/// directory and included in the error when startup fails.
 fn start_daemon(paths: &RuntimePaths, connect_err: &std::io::Error) -> Result<(), ClientError> {
     std::fs::create_dir_all(&paths.dir).map_err(|e| {
         ClientError::Daemon(format!("could not create {}: {e}", paths.dir.display()))
@@ -256,15 +264,22 @@ fn start_daemon(paths: &RuntimePaths, connect_err: &std::io::Error) -> Result<()
         ))
     })?;
 
+    let log_path = paths.dir.join("daemon.log");
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .map_err(|e| ClientError::Startup(format!("could not open {}: {e}", log_path.display())))?;
+
     let mut command = std::process::Command::new(&binary);
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    let child = command
+        .stderr(std::process::Stdio::from(log_file));
+    let mut child = command
         .spawn()
-        .map_err(|e| ClientError::Daemon(format!("failed to spawn jobwrapd: {e}")))?;
-    drop(child);
+        .map_err(|e| ClientError::Startup(format!("failed to spawn jobwrapd: {e}")))?;
 
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -273,18 +288,117 @@ fn start_daemon(paths: &RuntimePaths, connect_err: &std::io::Error) -> Result<()
                 return Ok(());
             }
         }
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(startup_error(
+                &log_path,
+                &format!("jobwrapd exited during startup ({status})"),
+            ));
+        }
         if std::time::Instant::now() > deadline {
-            return Err(ClientError::Connect(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
+            return Err(startup_error(
+                &log_path,
                 "jobwrapd did not create its socket in time",
-            )));
+            ));
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Build a startup error that includes the captured daemon output.
+fn startup_error(log_path: &Path, summary: &str) -> ClientError {
+    let tail = log_tail(log_path);
+    if tail.is_empty() {
+        ClientError::Startup(format!(
+            "{summary}; no output captured, run `jobwrapd --foreground` to see the error"
+        ))
+    } else {
+        ClientError::Startup(format!("{summary}:\n{tail}"))
+    }
+}
+
+/// Read at most the last `LOG_TAIL_BYTES` of a log file.
+fn log_tail(path: &Path) -> String {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(LOG_TAIL_BYTES as u64);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut buf = Vec::new();
+    let _ = file.take(LOG_TAIL_BYTES as u64).read_to_end(&mut buf);
+    strip_ansi(&String::from_utf8_lossy(&buf))
+        .trim()
+        .to_string()
+}
+
+/// Remove ANSI escape sequences (the daemon colors its tracing output).
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for end in chars.by_ref() {
+                if end.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The URL to show the user for the web interface.
+///
+/// When the first bind target is the tailscale interface and no explicit
+/// `public_base_url` was configured, the auto-derived placeholder host
+/// `tailscale` is replaced with the interface's own IPv4 address, which is
+/// reachable from every other node in the tailnet.
+pub fn public_url(config: &jobwrap_config::EffectiveConfig) -> String {
+    let base = config.server.public_base_url.trim_end_matches('/');
+    let first_bind = config
+        .server
+        .bind
+        .split(',')
+        .map(str::trim)
+        .find(|target| !target.is_empty())
+        .unwrap_or("");
+    let placeholder = format!("http://tailscale:{}", config.server.port);
+    if first_bind == "tailscale" && base == placeholder {
+        if let Ok(Some(address)) = jobwrap_pty::ffi::interface_ipv4("tailscale0") {
+            return format!("http://{address}:{}", config.server.port);
+        }
+    }
+    base.to_string()
 }
 
 /// Build the wrapped command environment. Currently empty; reserved for future
 /// per-profile environment overrides.
 pub fn build_env(_args: &crate::cli::WrapArgs) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_ansi_removes_color_escapes() {
+        let text = "\u{1b}[2m2026-09-09\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m: started";
+        assert_eq!(strip_ansi(text), "2026-09-09  INFO: started");
+    }
+
+    #[test]
+    fn strip_ansi_keeps_plain_text() {
+        let text = "Error: Io(Os { code: 98, kind: AddrInUse })";
+        assert_eq!(strip_ansi(text), text);
+    }
+
+    #[test]
+    fn strip_ansi_handles_trailing_escape() {
+        assert_eq!(strip_ansi("text \u{1b}["), "text ");
+    }
 }

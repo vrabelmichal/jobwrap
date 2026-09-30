@@ -95,6 +95,7 @@ $XDG_RUNTIME_DIR/jobwrap/
   daemon.sock   (mode 0600)
   daemon.pid
   daemon.lock
+  daemon.log    (the daemon's captured stderr; truncated on each start)
 ```
 
 Persistent state:
@@ -109,8 +110,10 @@ $XDG_DATA_HOME/jobwrap/web/
 `jobwrap` auto-starts `jobwrapd` under a lock, waits for its socket, and
 verifies the socket owner's UID before trusting it. The daemon can also be
 started directly with `jobwrap daemon start` (background) or
-`jobwrap daemon start --foreground` (attached to the terminal). A systemd
-user unit is provided but not required.
+`jobwrap daemon start --foreground` (attached to the terminal), and
+restarted with `jobwrap daemon restart` to pick up configuration changes.
+When auto-start fails, the daemon's captured output is included in the
+error. A systemd user unit is provided but not required.
 
 ## Crates
 

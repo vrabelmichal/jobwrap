@@ -186,7 +186,9 @@ fn send_signal(job: &str, signal: &str) -> anyhow::Result<()> {
 
 fn open(job: &Option<String>) -> anyhow::Result<()> {
     let config = load_effective()?;
-    let base = config.server.public_base_url.trim_end_matches('/');
+    let base = crate::daemon::public_url(&config)
+        .trim_end_matches('/')
+        .to_string();
     let url = match job {
         Some(job) => {
             let job_id = parse_job_id(job)?;
@@ -226,27 +228,66 @@ fn daemon(action: DaemonCommand) -> anyhow::Result<()> {
             if foreground {
                 return start_daemon_foreground(&paths);
             }
-            let client = DaemonClient::connect(&paths, true).context("starting daemon")?;
-            println!("daemon running (pid {})", client.daemon_pid);
-            let config = load_effective()?;
-            let base = config.server.public_base_url.trim_end_matches('/');
-            println!("web interface: {base}/");
-            Ok(())
+            start_and_report(&paths)
         }
-        DaemonCommand::Stop => {
-            // Obtain the PID from a verified live socket connection. A stale
-            // pid file must never be allowed to signal an unrelated process.
-            let client = DaemonClient::connect(&paths, false)
-                .context("daemon is not running or its socket is unavailable")?;
-            let pid = client.daemon_pid;
-            nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(pid),
-                nix::sys::signal::Signal::SIGTERM,
-            )
-            .map_err(|e| anyhow!("could not signal daemon pid {pid}: {e}"))?;
-            println!("shutdown requested for daemon pid {pid}");
-            Ok(())
+        DaemonCommand::Stop => match stop_daemon(&paths)? {
+            Some(pid) => {
+                wait_for_daemon_exit(&paths, pid)?;
+                println!("daemon stopped (pid {pid})");
+                Ok(())
+            }
+            None => {
+                println!("not running");
+                Ok(())
+            }
+        },
+        DaemonCommand::Restart => {
+            if let Some(pid) = stop_daemon(&paths)? {
+                wait_for_daemon_exit(&paths, pid)?;
+                println!("stopped daemon (pid {pid})");
+            }
+            start_and_report(&paths)
         }
+    }
+}
+
+/// Connect to (or start) the daemon and report its pid and web URL.
+fn start_and_report(paths: &jobwrap_config::RuntimePaths) -> anyhow::Result<()> {
+    let client = DaemonClient::connect(paths, true).context("starting daemon")?;
+    println!("daemon running (pid {})", client.daemon_pid);
+    let config = load_effective()?;
+    println!("web interface: {}/", crate::daemon::public_url(&config));
+    Ok(())
+}
+
+/// Send SIGTERM to the running daemon, if any, and return its pid. The pid
+/// comes from a verified live socket connection; a stale pid file must never
+/// be allowed to signal an unrelated process.
+fn stop_daemon(paths: &jobwrap_config::RuntimePaths) -> anyhow::Result<Option<i32>> {
+    let Ok(client) = DaemonClient::connect(paths, false) else {
+        return Ok(None);
+    };
+    let pid = client.daemon_pid;
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .map_err(|e| anyhow!("could not signal daemon pid {pid}: {e}"))?;
+    Ok(Some(pid))
+}
+
+/// Wait until the daemon releases its socket, so a replacement can bind it.
+fn wait_for_daemon_exit(paths: &jobwrap_config::RuntimePaths, pid: i32) -> anyhow::Result<()> {
+    use std::os::unix::net::UnixStream;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if UnixStream::connect(&paths.daemon_socket).is_err() {
+            return Ok(());
+        }
+        if std::time::Instant::now() > deadline {
+            bail!("daemon pid {pid} did not release its socket within 10 seconds");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
@@ -305,6 +346,7 @@ fn config(action: ConfigCommand) -> anyhow::Result<()> {
             let config = load_effective()?;
             println!("server.bind = {}", config.server.bind);
             println!("server.port = {}", config.server.port);
+            println!("server.public_base_url = {}", config.server.public_base_url);
             println!("daemon.auto_start = {}", config.daemon.auto_start);
             println!("defaults.profile = {}", config.defaults.profile);
             println!(

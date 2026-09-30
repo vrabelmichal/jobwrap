@@ -107,6 +107,8 @@ pub enum DaemonCommand {
     },
     /// Stop the daemon.
     Stop,
+    /// Restart the daemon so a new configuration takes effect.
+    Restart,
 }
 
 #[derive(Debug, Subcommand)]

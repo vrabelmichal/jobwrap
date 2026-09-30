@@ -227,9 +227,24 @@ impl EffectiveConfig {
             if let Some(v) = server.port {
                 cfg.server.port = v;
             }
-            if let Some(v) = &server.public_base_url {
-                cfg.server.public_base_url = v.clone();
-            }
+            cfg.server.public_base_url = match &server.public_base_url {
+                Some(v) => v.clone(),
+                None => {
+                    let first = cfg
+                        .server
+                        .bind
+                        .split(',')
+                        .map(str::trim)
+                        .find(|target| !target.is_empty())
+                        .unwrap_or("127.0.0.1");
+                    let host = if first == "loopback" {
+                        "127.0.0.1"
+                    } else {
+                        first
+                    };
+                    format!("http://{host}:{}", cfg.server.port)
+                }
+            };
             if let Some(v) = server.open_browser_on_start {
                 cfg.server.open_browser_on_start = v;
             }

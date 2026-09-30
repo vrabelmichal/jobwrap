@@ -82,10 +82,8 @@ pub fn run(args: WrapArgs) -> anyhow::Result<i32> {
             eprintln!("jobwrap: registered job {}", link.job_id);
             eprintln!("jobwrap: name {job_name}");
             if config.defaults.show_job_url && !args.no_web {
-                eprintln!(
-                    "jobwrap: web http://{}:{}/jobs/{}",
-                    config.server.bind, config.server.port, link.job_id
-                );
+                let base = crate::daemon::public_url(&config);
+                eprintln!("jobwrap: web {base}/jobs/{}", link.job_id);
             }
             eprintln!("jobwrap: control remains available from this terminal");
         }
