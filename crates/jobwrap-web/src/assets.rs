@@ -9,12 +9,11 @@ use jobwrap_core::JobRecord;
 pub const APP_JS: &str = include_str!("../../../web/app.js");
 pub const APP_CSS: &str = include_str!("../../../web/app.css");
 
-pub fn index_page(jobs_json: &str, authenticated: bool) -> String {
-    let auth_badge = if authenticated {
-        "authenticated"
-    } else {
-        r#"<a href="/login" class="login-link">log in</a>"#
-    };
+const AUTH_CONTROLS: &str = r#"<div class="auth-controls" data-auth-controls>
+  <span class="status-pill neutral">Session: checking…</span>
+</div>"#;
+
+pub fn index_page(jobs_json: &str, _authenticated: bool) -> String {
     let jobs_json = html_attribute_escape(jobs_json);
     format!(
         r#"<!doctype html>
@@ -26,10 +25,60 @@ pub fn index_page(jobs_json: &str, authenticated: bool) -> String {
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header><h1>jobwrap</h1><a href="/jobs/new" class="new-job-link">+ new job</a><span class="auth-badge">{auth_badge}</span></header>
-<main>
-<div id="job-list" data-jobs='{jobs_json}'></div>
-<noscript><p>JavaScript is required to view live job data.</p></noscript>
+<header class="app-header">
+  <div class="header-inner">
+    <div class="header-primary">
+      <a href="/" class="brand-link">jobwrap</a>
+    </div>
+    <div class="header-actions">
+      <a href="/jobs/new" class="primary-link">+ New job</a>
+      {AUTH_CONTROLS}
+    </div>
+  </div>
+</header>
+<main class="index-main">
+  <section class="page-intro">
+    <div>
+      <span class="eyebrow">process dashboard</span>
+      <h1>Jobs</h1>
+      <p class="muted">Monitor wrapped processes, find jobs quickly, and open a job for live output and controls.</p>
+    </div>
+    <span id="jobs-refresh-status" class="section-meta">refreshes every 5 s</span>
+  </section>
+
+  <section class="summary-strip" aria-label="Job summary">
+    <button class="summary-tile is-selected" data-job-filter="all" type="button">
+      <span class="summary-label">All</span><strong id="summary-all">0</strong>
+    </button>
+    <button class="summary-tile" data-job-filter="active" type="button">
+      <span class="summary-label">Active</span><strong id="summary-active">0</strong>
+    </button>
+    <button class="summary-tile" data-job-filter="attention" type="button">
+      <span class="summary-label">Needs attention</span><strong id="summary-attention">0</strong>
+    </button>
+    <button class="summary-tile" data-job-filter="finished" type="button">
+      <span class="summary-label">Finished</span><strong id="summary-finished">0</strong>
+    </button>
+  </section>
+
+  <section class="card jobs-card">
+    <div class="jobs-toolbar">
+      <label class="search-field" for="job-search">
+        <span class="sr-only">Search jobs</span>
+        <input id="job-search" type="search" placeholder="Search name, profile, PID or job ID" autocomplete="off">
+      </label>
+      <div class="filter-group" aria-label="Filter jobs">
+        <button type="button" class="filter-button is-selected" data-job-filter="all">All</button>
+        <button type="button" class="filter-button" data-job-filter="active">Active</button>
+        <button type="button" class="filter-button" data-job-filter="attention">Attention</button>
+        <button type="button" class="filter-button" data-job-filter="finished">Finished</button>
+      </div>
+      <button id="refresh-jobs" type="button" class="secondary-button">Refresh</button>
+    </div>
+    <div id="job-list" data-jobs='{jobs_json}'></div>
+    <p id="job-list-meta" class="list-meta" aria-live="polite"></p>
+  </section>
+  <noscript><p>JavaScript is required to view live job data.</p></noscript>
 </main>
 <script src="/static/app.js"></script>
 </body>
@@ -50,13 +99,21 @@ pub fn job_page(record: &JobRecord) -> String {
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header class="job-header">
-  <a href="/" class="back-link">&larr; jobs</a>
-  <div class="job-header-title">
-    <span class="eyebrow">job details</span>
-    <h1>{display_name}</h1>
+<header class="app-header job-header">
+  <div class="header-inner">
+    <div class="header-primary">
+      <a href="/" class="brand-link">jobwrap</a>
+      <a href="/" class="back-link">&larr; Jobs</a>
+      <div class="job-header-title">
+        <span class="eyebrow">job details</span>
+        <h1>{display_name}</h1>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span id="job-state" class="state status-pill neutral">{state}</span>
+      {AUTH_CONTROLS}
+    </div>
   </div>
-  <span id="job-state" class="state status-pill">{state}</span>
 </header>
 <main id="job-details" class="job-main" data-job="{}">
   <div class="details-layout">
@@ -182,8 +239,9 @@ pub const LAUNCH_CONFIG_SNIPPET: &str = "[launch]\nenabled = true\nrequire_previ
 /// The new-job page: a thin client over the same launch API the CLI uses.
 pub fn new_job_page(capabilities: &LaunchCapabilities, authenticated: bool) -> String {
     let body = if !authenticated {
-        "<p>Log in to create a new job.</p>\
-<p><a href=\"/login\" class=\"login-link\">log in</a></p>"
+        "<div class=\"notice\"><h2>Authentication required</h2>\
+<p>Log in to create a new job from the web interface.</p>\
+<p><a href=\"/login\" class=\"primary-link inline-action\">Log in</a></p></div>"
             .to_string()
     } else if !capabilities.enabled {
         format!(
@@ -218,8 +276,17 @@ new-terminal launches.</p></div>"
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header><a href="/" class="back-link">&larr; jobs</a><h1>new job</h1></header>
-<main>
+<header class="app-header">
+  <div class="header-inner">
+    <div class="header-primary">
+      <a href="/" class="brand-link">jobwrap</a>
+      <a href="/" class="back-link">&larr; Jobs</a>
+      <div class="page-header-title"><span class="eyebrow">process creation</span><h1>New job</h1></div>
+    </div>
+    <div class="header-actions">{AUTH_CONTROLS}</div>
+  </div>
+</header>
+<main class="form-main">
 {body}
 </main>
 <script src="/static/app.js"></script>
@@ -286,32 +353,37 @@ mode is currently available. Managed and existing-terminal daemon launches \
 fail closed by design (see the security model documentation).</p>";
 
     format!(
-        r#"<form id="launch-form" class="launch-form">
-  <label for="executable">Executable</label>
-  <input type="text" id="executable" name="executable" required
-         placeholder="/usr/bin/python3" autocomplete="off">
-  <label for="arguments">Arguments (one per line, no shell)</label>
-  <textarea id="arguments" name="arguments" rows="4"
-            placeholder="--config&#10;analysis.yaml"></textarea>
-  <label for="working-directory">Working directory (optional)</label>
-  <input type="text" id="working-directory" name="working-directory"
-         autocomplete="off">
-  <label for="display-name">Job name (optional)</label>
-  <input type="text" id="display-name" name="display-name" autocomplete="off">
-  <label for="profile">Profile</label>
-  <select id="profile" name="profile">{profile_options}</select>
-  {backend_field}
-  <button type="submit" id="launch-button">Launch</button>
-  <p id="launch-error" class="error"></p>
-  <p id="launch-status" class="muted"></p>
-</form>
-{backend_note}
-{modes_note}"#
+        r#"<section class="card launch-card">
+  <div class="section-heading">
+    <div><span class="eyebrow">launch configuration</span><h2>Start a wrapped process</h2></div>
+  </div>
+  <form id="launch-form" class="launch-form">
+    <label for="executable">Executable</label>
+    <input type="text" id="executable" name="executable" required
+           placeholder="/usr/bin/python3" autocomplete="off">
+    <label for="arguments">Arguments (one per line, no shell)</label>
+    <textarea id="arguments" name="arguments" rows="4"
+              placeholder="--config&#10;analysis.yaml"></textarea>
+    <label for="working-directory">Working directory (optional)</label>
+    <input type="text" id="working-directory" name="working-directory"
+           autocomplete="off">
+    <label for="display-name">Job name (optional)</label>
+    <input type="text" id="display-name" name="display-name" autocomplete="off">
+    <label for="profile">Profile</label>
+    <select id="profile" name="profile">{profile_options}</select>
+    {backend_field}
+    <button type="submit" id="launch-button">Launch job</button>
+    <p id="launch-error" class="error"></p>
+    <p id="launch-status" class="muted"></p>
+  </form>
+  <div class="launch-notes">{backend_note}{modes_note}</div>
+</section>"#
     )
 }
 
 pub fn login_page() -> String {
-    r#"<!doctype html>
+    format!(
+        r#"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -320,47 +392,54 @@ pub fn login_page() -> String {
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header><h1>jobwrap</h1></header>
-<main>
-<form id="login-form" class="login-form">
-  <label for="password">Password</label>
-  <input type="password" id="password" name="password" autocomplete="current-password">
-  <button type="submit">Log in</button>
-  <p id="login-error" class="error"></p>
-</form>
+<header class="app-header">
+  <div class="header-inner">
+    <div class="header-primary">
+      <a href="/" class="brand-link">jobwrap</a>
+      <a href="/" class="back-link">&larr; Jobs</a>
+      <div class="page-header-title"><span class="eyebrow">session</span><h1>Log in</h1></div>
+    </div>
+    <div class="header-actions">{AUTH_CONTROLS}</div>
+  </div>
+</header>
+<main class="login-main">
+  <section class="card login-card">
+    <div class="section-heading">
+      <div><span class="eyebrow">controller access</span><h2>Authenticate to jobwrap</h2></div>
+    </div>
+    <p class="muted">Log in to view protected command details and use controls allowed by each job's access policy.</p>
+    <form id="login-form" class="login-form">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" autofocus>
+      <button type="submit">Log in</button>
+      <p id="login-error" class="error" aria-live="polite"></p>
+    </form>
+  </section>
 </main>
-<script>
-document.getElementById('login-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const password = document.getElementById('password').value;
-  const res = await fetch('/api/v1/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
-  });
-  if (res.ok) { window.location.href = '/'; }
-  else { document.getElementById('login-error').textContent = 'incorrect password'; }
-});
-</script>
+<script src="/static/app.js"></script>
 </body>
 </html>"#
-        .to_string()
+    )
 }
 
 pub fn not_found_page(id: &str) -> String {
     let id = html_escape(id);
     format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><title>not found</title>
-<link rel="stylesheet" href="/static/app.css"></head><body><main><h1>job not found</h1>
-<p>No job with id <code>{id}</code> exists.</p><p><a href="/">back to jobs</a></p></main></body></html>"#
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>not found</title>
+<link rel="stylesheet" href="/static/app.css"></head><body>
+<header class="app-header"><div class="header-inner"><div class="header-primary"><a href="/" class="brand-link">jobwrap</a><a href="/" class="back-link">&larr; Jobs</a></div><div class="header-actions">{AUTH_CONTROLS}</div></div></header>
+<main class="message-main"><section class="card message-card"><span class="eyebrow">not found</span><h1>Job not found</h1>
+<p>No job with id <code>{id}</code> exists.</p><p><a href="/" class="primary-link inline-action">Back to jobs</a></p></section></main><script src="/static/app.js"></script></body></html>"#
     )
 }
 
 pub fn error_page(message: &str) -> String {
     format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><title>error</title>
-<link rel="stylesheet" href="/static/app.css"></head><body><main><h1>error</h1>
-<p>{}</p><p><a href="/">back to jobs</a></p></main></body></html>"#,
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>error</title>
+<link rel="stylesheet" href="/static/app.css"></head><body>
+<header class="app-header"><div class="header-inner"><div class="header-primary"><a href="/" class="brand-link">jobwrap</a><a href="/" class="back-link">&larr; Jobs</a></div><div class="header-actions">{AUTH_CONTROLS}</div></div></header>
+<main class="message-main"><section class="card message-card"><span class="eyebrow">request failed</span><h1>Error</h1>
+<p>{}</p><p><a href="/" class="primary-link inline-action">Back to jobs</a></p></section></main><script src="/static/app.js"></script></body></html>"#,
         html_escape(message)
     )
 }
@@ -404,6 +483,12 @@ mod tests {
     #[test]
     fn index_links_to_the_new_job_page() {
         assert!(index_page("[]", true).contains("href=\"/jobs/new\""));
+    }
+
+    #[test]
+    fn pages_share_authentication_controls() {
+        assert!(index_page("[]", false).contains("data-auth-controls"));
+        assert!(login_page().contains("data-auth-controls"));
     }
 
     #[test]
