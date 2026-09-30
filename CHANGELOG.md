@@ -50,6 +50,14 @@ All notable changes to jobwrap are documented in this file.
 
 ### Changed
 
+- The web interface now uses a consistent application header across the jobs
+  dashboard, job details, new-job, login, and error pages. Navigation,
+  authentication state, login/logout actions, and job-state indicators are
+  placed consistently and remain usable on narrow screens.
+- The jobs index is now a live dashboard with state summary counts, search and
+  state filters, five-second refreshes, responsive job cards/table rows, and
+  at-a-glance process, runtime, output, terminal, profile, and visibility
+  information from the existing job summaries.
 - The job details page is reorganized into overview, process, command,
   terminal-output, and signal-control sections. The browser's live-output
   connection is labeled separately from the job state instead of appearing as
