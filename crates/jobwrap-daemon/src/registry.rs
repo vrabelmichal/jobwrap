@@ -715,6 +715,19 @@ impl Registry {
         Ok(job.record.clone())
     }
 
+    /// Check live output access independently of log availability or offsets.
+    pub fn authorize_output(
+        &self,
+        principal: &Principal,
+        job_id: JobId,
+    ) -> Result<(), jobwrap_web::ApiError> {
+        let jobs = self.jobs.lock().expect("jobs lock");
+        let job = jobs
+            .get(&job_id)
+            .ok_or_else(|| jobwrap_web::ApiError::not_found("no such job"))?;
+        check_authorized(principal, &job.record, jobwrap_core::Permission::ViewOutput)
+    }
+
     pub fn get_output(
         &self,
         principal: &Principal,

@@ -69,6 +69,15 @@ pub trait JobService: Send + Sync {
     /// that require stronger permissions than status access.
     fn get_job(&self, principal: &Principal, id: JobId) -> Result<JobRecord, ApiError>;
 
+    /// Authorize a live output subscription without reading the output log.
+    ///
+    /// The default implementation checks through the output API. Services with
+    /// a direct authorization path should override this to avoid reading and
+    /// discarding log data.
+    fn authorize_output(&self, principal: &Principal, id: JobId) -> Result<(), ApiError> {
+        self.get_output(principal, id, 0).map(|_| ())
+    }
+
     /// Output since a sequence number (authorized to view output).
     fn get_output(
         &self,

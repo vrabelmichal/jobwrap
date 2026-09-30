@@ -47,6 +47,10 @@ impl JobService for DaemonService {
         self.registry.get_job(principal, id)
     }
 
+    fn authorize_output(&self, principal: &Principal, id: JobId) -> Result<(), ApiError> {
+        self.registry.authorize_output(principal, id)
+    }
+
     fn get_output(
         &self,
         principal: &Principal,

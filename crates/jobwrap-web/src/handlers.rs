@@ -508,7 +508,7 @@ pub async fn job_ws(
     let id = job_id(&id)?;
     let principal = principal_from_headers(service(&state), &headers);
     // Output authorization is intentionally stronger than status access.
-    let _ = state.service.get_output(&principal, id, u64::MAX)?;
+    state.service.authorize_output(&principal, id)?;
     let permit = state
         .websocket_limit
         .clone()

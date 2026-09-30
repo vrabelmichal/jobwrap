@@ -38,6 +38,8 @@ All notable changes to jobwrap are documented in this file.
 
 ### Fixed
 
+- WebSocket live-output connections now check output permissions without
+  seeking to an invalid log offset, so authorized connections can upgrade.
 - Daemon startup failures are now visible: `jobwrap` captures the daemon's
   stderr in `daemon.log` under the runtime directory, fails fast when
   `jobwrapd` exits during startup, and includes the captured output
