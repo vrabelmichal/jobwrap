@@ -6,9 +6,43 @@ All notable changes to jobwrap are documented in this file.
 
 ### Added
 
+- Web interface: a "new job" page at `/jobs/new` (linked from the jobs list)
+  so logged-in users can create processes from the browser. It submits the
+  same `POST /api/v1/launch` API as the CLI, submits arguments as a
+  structured list (one per line, never shell-parsed), generates a fresh
+  idempotency key per attempt, and redirects to the job page once the new
+  terminal's wrapper has registered the job. When daemon-side creation is
+  disabled or fails closed (`[launch] enabled`, `require_preview`), the page
+  shows the responsible configuration instead of the form.
 - `jobwrap daemon start --foreground` runs the daemon attached to the
   current terminal (Ctrl+C stops it) instead of in the background.
 - `jobwrap daemon start` prints the web interface URL after starting.
+- `server.bind = "tailscale"` binds only the `tailscale0` interface, making
+  the web interface reachable from other machines in the tailnet without
+  exposing it to the local network or the internet. `bind` now also accepts
+  a comma-separated list of targets (for example `loopback,tailscale`), and
+  the daemon binds one listener per target. Other non-loopback binds remain
+  refused (as documented in the security model), and unrecognized bind
+  values are now rejected at configuration validation instead of failing
+  later at bind time.
+
+- `jobwrap daemon restart` stops the running daemon, waits for it to
+  release its socket, and starts a new one, so configuration and binary
+  changes take effect with a single command.
+- `jobwrap daemon stop` now waits for the daemon to exit and reports
+  `not running` (exit 0) when no daemon is up, instead of failing.
+
+### Fixed
+
+- Daemon startup failures are now visible: `jobwrap` captures the daemon's
+  stderr in `daemon.log` under the runtime directory, fails fast when
+  `jobwrapd` exits during startup, and includes the captured output
+  (for example a busy HTTP port) in the error instead of waiting ten
+  seconds for a socket that never appears.
+- `server.public_base_url` now defaults to `http://{bind}:{port}` instead
+  of a hardcoded `http://127.0.0.1:8765`, so changing `server.port` no
+  longer leaves `jobwrap daemon start`, `jobwrap open`, and related URLs
+  pointing at the old port. An explicitly configured value is still kept.
 
 ## [0.1.0] - 2026-08-01
 

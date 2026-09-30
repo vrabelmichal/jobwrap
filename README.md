@@ -38,10 +38,14 @@ In another terminal:
 jobwrap list                 # list jobs
 jobwrap show <JOB_ID>        # details
 jobwrap signal <JOB_ID> int  # send SIGINT
+jobwrap daemon restart       # apply a config change
 jobwrap daemon stop          # stop the daemon
 ```
 
-Open the printed web URL for live output. Use
+Open the printed web URL for live output. When daemon-side process creation
+is enabled in the configuration (it is off by default; see
+`docs/configuration.md`), the web interface also offers a "new job" form at
+`/jobs/new`. Use
 `jobwrap daemon start --foreground` to keep the daemon attached to the
 terminal instead of the background.
 
