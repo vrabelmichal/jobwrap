@@ -38,6 +38,9 @@ All notable changes to jobwrap are documented in this file.
 
 ### Fixed
 
+- Web status badges now share consistent sizing across states and pages.
+  Warning messages no longer override warning badge padding, and compact
+  actions align consistently with badges and dashboard filters.
 - WebSocket live-output connections now check output permissions without
   seeking to an invalid log offset, so authorized connections can upgrade.
 - Daemon startup failures are now visible: `jobwrap` captures the daemon's

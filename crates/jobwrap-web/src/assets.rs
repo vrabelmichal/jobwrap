@@ -341,7 +341,7 @@ arguments are never placed on the emulator command line.</p>",
         )
     } else {
         format!(
-            "<p class=\"warning\">The configured terminal backend \
+            "<p class=\"warning-notice\">The configured terminal backend \
 <code>{}</code> is not installed; launches will fail until a supported \
 backend (gnome-terminal or xterm) is available.</p>",
             html_escape(&capabilities.preferred_backend)
