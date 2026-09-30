@@ -32,30 +32,40 @@ async function postJson(url, body) {
   return res.json();
 }
 
-function renderJobList() {
-  const container = document.getElementById('job-list');
-  if (!container) return;
-  const jobs = JSON.parse(container.dataset.jobs || '[]');
-  if (!jobs.length) {
-    container.innerHTML = '<p class="muted">no jobs</p>';
-    return;
-  }
-  let html = '<table class="jobs"><thead><tr>' +
-    '<th>name</th><th>state</th><th>profile</th><th>started</th></tr></thead><tbody>';
-  for (const job of jobs) {
-    html += `<tr><td><a href="/jobs/${job.id}">${escapeHtml(job.display_name)}</a></td>` +
-      `<td>${escapeHtml(formatState(job.state))}</td><td>${escapeHtml(job.profile_name)}</td>` +
-      `<td>${escapeHtml(job.started_at || '')}</td></tr>`;
-  }
-  html += '</tbody></table>';
-  container.innerHTML = html;
-}
-
 function formatState(state) {
   if (!state || typeof state === 'string') return state || 'unknown';
   if (state.type === 'exited') return `exited (${state.code})`;
   if (state.type === 'signaled') return `signaled (${state.signal})`;
   return state.type || 'unknown';
+}
+
+function stateType(state) {
+  if (!state) return 'unknown';
+  return typeof state === 'string' ? state : (state.type || 'unknown');
+}
+
+function stateTone(state) {
+  switch (stateType(state)) {
+    case 'running': return 'success';
+    case 'stopped':
+    case 'disconnected': return 'warning';
+    case 'lost':
+    case 'signaled': return 'danger';
+    default: return 'neutral';
+  }
+}
+
+function stateGroup(state) {
+  switch (stateType(state)) {
+    case 'registering':
+    case 'running':
+    case 'stopped': return 'active';
+    case 'disconnected':
+    case 'lost': return 'attention';
+    case 'exited':
+    case 'signaled': return 'finished';
+    default: return 'attention';
+  }
 }
 
 function escapeHtml(s) {
@@ -110,6 +120,189 @@ function formatBytes(value) {
   }
   const digits = unit === 0 || scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
   return `${scaled.toFixed(digits)} ${units[unit]}`;
+}
+
+function shortJobId(id) {
+  const value = String(id || '');
+  return value.length > 12 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
+}
+
+const jobListState = {
+  jobs: [],
+  filter: 'all',
+  query: '',
+};
+
+function jobMatchesQuery(job, query) {
+  if (!query) return true;
+  const haystack = [
+    job.display_name,
+    job.profile_name,
+    job.id,
+    job.child_pid,
+    job.wrapper_pid,
+    job.visibility,
+    formatState(job.state),
+  ].filter((value) => value !== null && value !== undefined).join(' ').toLowerCase();
+  return haystack.includes(query);
+}
+
+function updateJobSummary(jobs) {
+  const counts = { all: jobs.length, active: 0, attention: 0, finished: 0 };
+  for (const job of jobs) counts[stateGroup(job.state)] += 1;
+  setText('summary-all', counts.all);
+  setText('summary-active', counts.active);
+  setText('summary-attention', counts.attention);
+  setText('summary-finished', counts.finished);
+}
+
+function renderJobList() {
+  const container = document.getElementById('job-list');
+  if (!container) return;
+
+  const jobs = [...jobListState.jobs].sort((a, b) => {
+    const aTime = new Date(a.started_at || 0).getTime();
+    const bTime = new Date(b.started_at || 0).getTime();
+    return bTime - aTime;
+  });
+  updateJobSummary(jobs);
+
+  const visible = jobs.filter((job) => {
+    const filterOk = jobListState.filter === 'all' || stateGroup(job.state) === jobListState.filter;
+    return filterOk && jobMatchesQuery(job, jobListState.query);
+  });
+
+  const meta = document.getElementById('job-list-meta');
+  if (meta) {
+    meta.textContent = visible.length === jobs.length
+      ? `${jobs.length} job${jobs.length === 1 ? '' : 's'}`
+      : `Showing ${visible.length} of ${jobs.length} jobs`;
+  }
+
+  if (!jobs.length) {
+    container.innerHTML = '<div class="empty-state"><strong>No jobs yet</strong><p>Wrap a command from the terminal or create a job from the web interface.</p><a href="/jobs/new" class="primary-link inline-action">+ New job</a></div>';
+    return;
+  }
+  if (!visible.length) {
+    container.innerHTML = '<div class="empty-state"><strong>No matching jobs</strong><p>Try another search or state filter.</p></div>';
+    return;
+  }
+
+  let html = '<table class="jobs"><thead><tr>' +
+    '<th>Job</th><th>State</th><th>Process</th><th>Started</th><th>Runtime</th><th>Output</th></tr></thead><tbody>';
+  for (const job of visible) {
+    const terminal = job.terminal || {};
+    const pid = job.child_pid === null || job.child_pid === undefined ? '—' : job.child_pid;
+    const output = formatBytes(job.output_bytes);
+    const truncated = job.log_truncated ? '<span class="row-warning">truncated</span>' : '';
+    const visibility = job.visibility ? escapeHtml(job.visibility) : '—';
+    html += `<tr>` +
+      `<td data-label="Job"><a class="job-name" href="/jobs/${encodeURIComponent(job.id)}">${escapeHtml(job.display_name)}</a>` +
+        `<span class="row-subtitle">${escapeHtml(job.profile_name)} · ${escapeHtml(shortJobId(job.id))}</span></td>` +
+      `<td data-label="State"><span class="status-pill ${stateTone(job.state)}">${escapeHtml(formatState(job.state))}</span>` +
+        `<span class="row-subtitle">${visibility}</span></td>` +
+      `<td data-label="Process"><span class="row-value">PID ${escapeHtml(pid)}</span>` +
+        `<span class="row-subtitle">${terminal.attached ? 'terminal attached' : 'no terminal at launch'}</span></td>` +
+      `<td data-label="Started"><span class="row-value">${escapeHtml(formatDate(job.started_at))}</span></td>` +
+      `<td data-label="Runtime"><span class="row-value tabular">${escapeHtml(formatDuration(job.started_at, job.finished_at))}</span></td>` +
+      `<td data-label="Output"><span class="row-value tabular">${escapeHtml(output)}</span>${truncated}</td>` +
+      `</tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function setJobFilter(filter) {
+  jobListState.filter = filter;
+  document.querySelectorAll('[data-job-filter]').forEach((button) => {
+    const selected = button.dataset.jobFilter === filter;
+    button.classList.toggle('is-selected', selected);
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  });
+  renderJobList();
+}
+
+async function refreshJobs() {
+  const refreshStatus = document.getElementById('jobs-refresh-status');
+  const refreshButton = document.getElementById('refresh-jobs');
+  if (refreshButton) refreshButton.disabled = true;
+  try {
+    const response = await fetch('/api/v1/jobs', { cache: 'no-store' });
+    if (!response.ok) throw new Error(response.statusText || 'could not load jobs');
+    jobListState.jobs = await response.json();
+    renderJobList();
+    if (refreshStatus) refreshStatus.textContent = 'refreshes every 5 s';
+  } catch (error) {
+    if (refreshStatus) refreshStatus.textContent = `refresh failed: ${error.message}`;
+  } finally {
+    if (refreshButton) refreshButton.disabled = false;
+  }
+}
+
+function initJobList() {
+  const container = document.getElementById('job-list');
+  if (!container) return;
+  try {
+    jobListState.jobs = JSON.parse(container.dataset.jobs || '[]');
+  } catch (error) {
+    jobListState.jobs = [];
+  }
+  renderJobList();
+
+  const search = document.getElementById('job-search');
+  if (search) {
+    search.addEventListener('input', () => {
+      jobListState.query = search.value.trim().toLowerCase();
+      renderJobList();
+    });
+  }
+  document.querySelectorAll('[data-job-filter]').forEach((button) => {
+    button.addEventListener('click', () => setJobFilter(button.dataset.jobFilter || 'all'));
+  });
+  const refreshButton = document.getElementById('refresh-jobs');
+  if (refreshButton) refreshButton.addEventListener('click', refreshJobs);
+
+  window.setInterval(() => {
+    if (!document.hidden) refreshJobs();
+  }, 5000);
+}
+
+async function refreshAuthControls() {
+  const containers = document.querySelectorAll('[data-auth-controls]');
+  if (!containers.length) return;
+  let authenticated = false;
+  try {
+    const response = await fetch('/api/v1/auth', { cache: 'no-store' });
+    if (!response.ok) throw new Error(response.statusText);
+    const data = await response.json();
+    authenticated = Boolean(data.authenticated);
+  } catch (error) {
+    containers.forEach((container) => {
+      container.innerHTML = '<span class="status-pill warning">Session unavailable</span>';
+    });
+    return;
+  }
+
+  containers.forEach((container) => {
+    if (authenticated) {
+      container.innerHTML = '<span class="status-pill success">Authenticated</span><button type="button" class="header-text-button" data-logout>Log out</button>';
+    } else {
+      container.innerHTML = '<span class="status-pill neutral">Not authenticated</span><a href="/login" class="header-action login-link">Log in</a>';
+    }
+  });
+
+  document.querySelectorAll('[data-logout]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        await postJson('/api/v1/logout', {});
+        window.location.href = '/';
+      } catch (error) {
+        button.textContent = 'Logout failed';
+        button.disabled = false;
+      }
+    });
+  });
 }
 
 function setConnection(text, tone) {
@@ -181,13 +374,14 @@ function renderJobDetails(data) {
   setText('job-pgid', data.process_group_id);
 
   const stateNode = document.getElementById('job-state');
-  if (stateNode) stateNode.textContent = formatState(data.state);
+  if (stateNode) {
+    stateNode.textContent = formatState(data.state);
+    stateNode.className = `state status-pill ${stateTone(data.state)}`;
+  }
 
   const command = document.getElementById('job-command');
   const copyButton = document.getElementById('copy-command');
-  if (command) {
-    command.textContent = data.command || 'Not available with current access.';
-  }
+  if (command) command.textContent = data.command || 'Not available with current access.';
   if (copyButton) {
     copyButton.disabled = !data.command;
     copyButton.dataset.command = data.command || '';
@@ -258,7 +452,7 @@ async function connectTerminal(jobId) {
   ws.onopen = () => { setConnection('Live output: connected', 'success'); };
   ws.onerror = () => { setConnection('Live output: connection error', 'warning'); };
   ws.onclose = () => {
-    setConnection('Live output: offline (job state is shown above)', 'neutral');
+    setConnection('Live output: disconnected', 'neutral');
   };
   ws.onmessage = (event) => {
     let msg;
@@ -267,7 +461,10 @@ async function connectTerminal(jobId) {
       appendBytes(terminal, b64decode(msg.data_base64));
     } else if (msg.type === 'state_changed') {
       const stateEl = document.getElementById('job-state');
-      if (stateEl) stateEl.textContent = formatState(msg.state);
+      if (stateEl) {
+        stateEl.textContent = formatState(msg.state);
+        stateEl.className = `state status-pill ${stateTone(msg.state)}`;
+      }
       refreshJobDetails(jobId);
     }
   };
@@ -318,9 +515,6 @@ function initLaunchForm() {
   const statusEl = document.getElementById('launch-status');
   const button = document.getElementById('launch-button');
 
-  // Poll briefly until the wrapper in the new terminal has registered the
-  // job, then open its page. Launch accepted + not yet registered is normal:
-  // the terminal window has to start first.
   async function waitForJob(jobId) {
     statusEl.textContent = 'launch accepted; waiting for the terminal to connect…';
     for (let attempt = 0; attempt < 40; attempt++) {
@@ -350,7 +544,6 @@ function initLaunchForm() {
       errorEl.textContent = 'an executable is required';
       return;
     }
-    // Arguments are submitted one per line: structured, never shell-parsed.
     const args = document.getElementById('arguments').value
       .split('\n')
       .map((line) => line.trim())
@@ -376,10 +569,27 @@ function initLaunchForm() {
     try {
       const data = await postJson('/api/v1/launch', body);
       await waitForJob(data.job_id);
-    } catch (e) {
-      errorEl.textContent = e.message;
+    } catch (error) {
+      errorEl.textContent = error.message;
     } finally {
       button.disabled = false;
+    }
+  });
+}
+
+function initLoginForm() {
+  const form = document.getElementById('login-form');
+  if (!form) return;
+  const errorEl = document.getElementById('login-error');
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    errorEl.textContent = '';
+    const password = document.getElementById('password').value;
+    try {
+      await postJson('/api/v1/login', { password });
+      window.location.href = '/';
+    } catch (error) {
+      errorEl.textContent = 'Incorrect password.';
     }
   });
 }
@@ -422,6 +632,8 @@ async function initJobDetailsPage() {
   }, 5000);
 }
 
-if (document.getElementById('job-list')) renderJobList();
+initJobList();
 if (document.getElementById('job-details')) initJobDetailsPage();
 initLaunchForm();
+initLoginForm();
+refreshAuthControls();
