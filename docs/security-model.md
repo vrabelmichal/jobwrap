@@ -43,8 +43,12 @@ document.
 * the HTTP server binds to loopback (`127.0.0.1` and `[::1]`) by default;
 * the daemon refuses non-loopback binds, including when the legacy
   `allow_remote_bind` field is true;
-* remote access is intended through `ssh -L` or a TLS-terminating reverse
-  proxy, not through a plaintext internet listener;
+* the single exception is the explicit `bind = "tailscale"` target, which
+  listens only on the `tailscale0` VPN interface. That interface is
+  authenticated (WireGuard) and private to the tailnet, so binding it does
+  not expose the daemon to the LAN or the internet;
+* remote access is intended through the tailscale bind, `ssh -L`, or a
+  TLS-terminating reverse proxy, not through a plaintext internet listener;
 * no custom cryptography is implemented.
 
 ### Unix socket trust

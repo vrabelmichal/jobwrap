@@ -63,11 +63,32 @@ async fn main() -> Result<(), DaemonError> {
     // Load persisted jobs as disconnected/lost records.
     registry.load_persisted_jobs()?;
 
-    // Start the HTTP server.
+    // Start the HTTP server: one listener per bind target.
     let service = Arc::new(service::DaemonService::new(registry.clone()));
     let router = build_router(service.clone());
-    let bind_addr = format!("{}:{}", config.server.bind, config.server.port);
-    let mut http_task = tokio::spawn(serve_http(router, bind_addr.clone()));
+    let mut listeners = Vec::new();
+    for address in resolve_binds(&config.server.bind) {
+        match tokio::net::TcpListener::bind((address.as_str(), config.server.port)).await {
+            Ok(listener) => listeners.push(listener),
+            Err(error) => {
+                cleanup_runtime_files(&socket_path, &runtime.daemon_pid);
+                return Err(DaemonError::Io(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("could not bind {address}:{}: {error}", config.server.port),
+                )));
+            }
+        }
+    }
+    let bound: Vec<String> = listeners
+        .iter()
+        .map(|listener| {
+            listener
+                .local_addr()
+                .map(|address| address.to_string())
+                .unwrap_or_else(|_| "?".to_string())
+        })
+        .collect();
+    let mut http_task = tokio::spawn(serve_http(listeners, router));
 
     // Start the Unix socket server.
     let mut socket_task = tokio::spawn(socket::serve(
@@ -76,7 +97,12 @@ async fn main() -> Result<(), DaemonError> {
         socket_path.clone(),
     ));
 
-    tracing::info!(pid = %std::process::id(), socket = %socket_path.display(), http = %bind_addr, "jobwrapd started");
+    tracing::info!(
+        pid = %std::process::id(),
+        socket = %socket_path.display(),
+        http = %bound.join(", "),
+        "jobwrapd started"
+    );
 
     tokio::select! {
         _ = shutdown_signal() => {}
@@ -96,6 +122,40 @@ async fn main() -> Result<(), DaemonError> {
     socket_task.abort();
     cleanup_runtime_files(&socket_path, &runtime.daemon_pid);
     Ok(())
+}
+
+/// Resolve the configured bind targets to the addresses the sockets are
+/// bound to.
+///
+/// The value may name several comma-separated targets. `loopback` and
+/// `tailscale` name a network interface; any other value is used as the
+/// address itself. Duplicate addresses are bound only once.
+fn resolve_binds(bind: &str) -> Vec<String> {
+    let mut addresses: Vec<String> = Vec::new();
+    for target in bind.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        let address = match target {
+            "loopback" => "127.0.0.1".to_string(),
+            "tailscale" => match jobwrap_pty::ffi::interface_ipv4("tailscale0") {
+                Ok(Some(address)) => address.to_string(),
+                Ok(None) => {
+                    tracing::warn!("tailscale0 has no IPv4 address; using loopback instead");
+                    "127.0.0.1".to_string()
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "could not query tailscale0; using loopback instead");
+                    "127.0.0.1".to_string()
+                }
+            },
+            other => other.to_string(),
+        };
+        if !addresses.contains(&address) {
+            addresses.push(address);
+        }
+    }
+    if addresses.is_empty() {
+        addresses.push("127.0.0.1".to_string());
+    }
+    addresses
 }
 
 fn prepare_socket_path(path: &std::path::Path) -> io::Result<()> {
@@ -175,18 +235,43 @@ fn task_ended(
     }
 }
 
-async fn serve_http(router: axum::Router, bind_addr: String) -> std::io::Result<()> {
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    let addr = listener.local_addr()?;
-    let std_listener = listener
-        .into_std()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    axum::Server::from_tcp(std_listener)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
-        .serve(router.into_make_service())
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    tracing::info!(%addr, "http server listening");
+/// Serve the router on every listener. The first listener to stop decides
+/// the outcome; remaining servers are torn down when the process exits.
+async fn serve_http(
+    listeners: Vec<tokio::net::TcpListener>,
+    router: axum::Router,
+) -> std::io::Result<()> {
+    let (report, mut reports) = tokio::sync::mpsc::channel(listeners.len());
+    for listener in listeners {
+        let address = listener
+            .local_addr()
+            .map(|address| address.to_string())
+            .unwrap_or_else(|_| "?".to_string());
+        let router = router.clone();
+        let report = report.clone();
+        tokio::spawn(async move {
+            let std_listener = match listener.into_std() {
+                Ok(listener) => listener,
+                Err(error) => {
+                    let _ = report.send(Err(error)).await;
+                    return;
+                }
+            };
+            tracing::info!(%address, "http server listening");
+            let result = match axum::Server::from_tcp(std_listener) {
+                Ok(server) => server
+                    .serve(router.into_make_service())
+                    .await
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)),
+                Err(error) => Err(std::io::Error::new(std::io::ErrorKind::Other, error)),
+            };
+            let _ = report.send(result).await;
+        });
+    }
+    drop(report);
+    while let Some(result) = reports.recv().await {
+        result?;
+    }
     Ok(())
 }
 
@@ -234,4 +319,55 @@ pub enum DaemonError {
     Config(#[from] jobwrap_config::ConfigError),
     #[error("unsafe configuration: {0}")]
     UnsafeConfiguration(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_alias_resolves() {
+        assert_eq!(resolve_binds("loopback"), vec!["127.0.0.1"]);
+    }
+
+    #[test]
+    fn literal_addresses_pass_through() {
+        assert_eq!(resolve_binds("127.0.0.2"), vec!["127.0.0.2"]);
+        assert_eq!(resolve_binds("192.168.1.10"), vec!["192.168.1.10"]);
+    }
+
+    #[test]
+    fn duplicates_are_bound_once() {
+        assert_eq!(resolve_binds("loopback,127.0.0.1"), vec!["127.0.0.1"]);
+        assert_eq!(resolve_binds("loopback, loopback"), vec!["127.0.0.1"]);
+    }
+
+    #[test]
+    fn empty_value_falls_back_to_loopback() {
+        assert_eq!(resolve_binds(""), vec!["127.0.0.1"]);
+        assert_eq!(resolve_binds(" , "), vec!["127.0.0.1"]);
+    }
+
+    #[test]
+    fn tailscale_resolves_the_interface_or_falls_back() {
+        let address = resolve_binds("tailscale");
+        if address == vec!["127.0.0.1"] {
+            // No tailscale interface in this environment; the fallback fired.
+        } else {
+            // The tailscale CGNAT range is 100.64.0.0/10.
+            assert!(address[0].starts_with("100."));
+        }
+    }
+
+    #[test]
+    fn multiple_targets_keep_their_order() {
+        let binds = resolve_binds("loopback,tailscale");
+        assert_eq!(binds[0], "127.0.0.1");
+        if binds.len() == 2 {
+            assert!(binds[1].starts_with("100."));
+        } else {
+            // No tailscale interface: the fallback collapsed onto loopback.
+            assert_eq!(binds.len(), 1);
+        }
+    }
 }

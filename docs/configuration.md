@@ -18,8 +18,15 @@ safe built-in defaults; a malformed existing file is never silently ignored.
 config_version = 1
 
 [server]
+# Where the web interface listens: "loopback" (the default), "tailscale"
+# (the tailscale0 interface only), an IP address such as "127.0.0.1", or a
+# comma-separated list to listen on several at once, e.g.
+# "loopback,tailscale".
 bind = "127.0.0.1"
 port = 8765
+# Defaults to http://{bind}:{port} when unset (derived from the first bind
+# target). Override it when the daemon is reached under a different public
+# address, for example a proxy or the machine's tailscale hostname.
 public_base_url = "http://127.0.0.1:8765"
 open_browser_on_start = false
 allow_remote_bind = false
@@ -86,6 +93,31 @@ status = "authenticated"
 output = "authenticated"
 # ... all owner for the private profile
 ```
+
+## Exposing over TailScale
+
+To make the web interface reachable from other machines in your tailnet
+without exposing it to the local network or the internet:
+
+```toml
+config_version = 1
+
+[server]
+bind = "tailscale"
+port = 8790
+public_base_url = "http://<your-host>.ts.net:8790"
+```
+
+`bind = "tailscale"` listens on the `tailscale0` interface only. The
+interface is authenticated by WireGuard and private to your tailnet, so it
+is treated as loopback-equivalent by validation; every other non-loopback
+bind is still refused (see `docs/security-model.md`). To listen on loopback
+and the tailnet at the same time, use a list: `bind = "loopback,tailscale"`.
+If the tailscale interface is unavailable, the daemon logs a warning and
+binds loopback instead. Set `public_base_url` to the machine's tailscale
+hostname so `jobwrap open` and printed links use it; when it is left unset,
+the first bind target's address is used instead, which is also reachable
+from every node in the tailnet.
 
 ## Access levels
 

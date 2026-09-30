@@ -32,6 +32,8 @@ pub enum ValidationIssue {
         value: u64,
         range: &'static str,
     },
+    /// A configured bind value is not a supported target.
+    InvalidBind { value: String },
 }
 
 impl fmt::Display for ValidationIssue {
@@ -75,25 +77,59 @@ impl fmt::Display for ValidationIssue {
             } => {
                 write!(f, "{field} = {value} is outside the safe range {range}")
             }
+            ValidationIssue::InvalidBind { value } => {
+                write!(
+                    f,
+                    "server.bind = `{value}` is not a supported bind target \
+                     (use an IP address, \"loopback\", \"tailscale\", or a \
+                     comma-separated list of those)"
+                )
+            }
         }
     }
+}
+
+/// Whether a single bind target is as private as loopback.
+fn is_loopback_target(target: &str) -> bool {
+    matches!(target, "loopback" | "tailscale" | "localhost")
+        || target
+            .parse::<std::net::IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false)
+}
+
+/// Whether a single bind target is recognized at all.
+fn is_known_target(target: &str) -> bool {
+    matches!(
+        target,
+        "loopback" | "tailscale" | "localhost" | "0.0.0.0" | "::" | "127.0.0.1" | "::1"
+    ) || target.parse::<std::net::IpAddr>().is_ok()
 }
 
 /// Return all validation issues found in the configuration.
 pub fn validate_effective(cfg: &EffectiveConfig) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
-    let loopback = cfg.server.bind == "localhost"
-        || cfg
-            .server
-            .bind
-            .parse::<std::net::IpAddr>()
-            .map(|address| address.is_loopback())
-            .unwrap_or(false);
+    let targets: Vec<&str> = cfg
+        .server
+        .bind
+        .split(',')
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .collect();
+    // "tailscale" names the authenticated tailscale0 VPN interface, so it is
+    // as private as loopback; every other non-loopback bind target is
+    // refused (see docs/security-model.md).
+    let loopback = !targets.is_empty() && targets.iter().all(|target| is_loopback_target(target));
     if !loopback {
         issues.push(ValidationIssue::UnsafeBind {
             bind: cfg.server.bind.clone(),
             port: cfg.server.port,
             allow_remote_bind: cfg.server.allow_remote_bind,
+        });
+    }
+    if targets.is_empty() || !targets.iter().all(|target| is_known_target(target)) {
+        issues.push(ValidationIssue::InvalidBind {
+            value: cfg.server.bind.clone(),
         });
     }
     if cfg.authentication.password_attempt_limit == 0 {
@@ -213,6 +249,56 @@ mod tests {
         assert!(validate_effective(&cfg)
             .iter()
             .any(|i| matches!(i, ValidationIssue::UnsafeBind { .. })));
+    }
+
+    #[test]
+    fn tailscale_bind_is_accepted() {
+        let mut cfg = EffectiveConfig::builtin();
+        cfg.server.bind = "tailscale".to_string();
+        assert!(validate_effective(&cfg).is_empty());
+    }
+
+    #[test]
+    fn loopback_and_tailscale_list_is_accepted() {
+        let mut cfg = EffectiveConfig::builtin();
+        cfg.server.bind = "loopback,tailscale".to_string();
+        assert!(validate_effective(&cfg).is_empty());
+    }
+
+    #[test]
+    fn unsafe_target_in_list_is_flagged() {
+        let mut cfg = EffectiveConfig::builtin();
+        cfg.server.bind = "loopback,0.0.0.0".to_string();
+        assert!(validate_effective(&cfg)
+            .iter()
+            .any(|i| matches!(i, ValidationIssue::UnsafeBind { .. })));
+    }
+
+    #[test]
+    fn unknown_target_in_list_is_flagged() {
+        let mut cfg = EffectiveConfig::builtin();
+        cfg.server.bind = "loopback,nope".to_string();
+        assert!(validate_effective(&cfg)
+            .iter()
+            .any(|i| matches!(i, ValidationIssue::InvalidBind { .. })));
+    }
+
+    #[test]
+    fn empty_bind_is_flagged() {
+        let mut cfg = EffectiveConfig::builtin();
+        cfg.server.bind = ",,".to_string();
+        assert!(validate_effective(&cfg)
+            .iter()
+            .any(|i| matches!(i, ValidationIssue::InvalidBind { .. })));
+    }
+
+    #[test]
+    fn unknown_bind_target_is_flagged() {
+        let mut cfg = EffectiveConfig::builtin();
+        cfg.server.bind = "not-a-bind".to_string();
+        assert!(validate_effective(&cfg)
+            .iter()
+            .any(|i| matches!(i, ValidationIssue::InvalidBind { .. })));
     }
 
     #[test]

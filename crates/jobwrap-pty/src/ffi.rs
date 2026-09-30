@@ -393,3 +393,66 @@ pub fn set_relay_mode(fd: RawFd) -> io::Result<()> {
     let relay = relay_mode_termios(&current);
     tcsetattr(fd, libc::TCSANOW, &relay)
 }
+
+/// Look up the first IPv4 address assigned to a network interface.
+///
+/// Returns `Ok(None)` when the interface does not exist or carries no IPv4
+/// address.
+pub fn interface_ipv4(name: &str) -> io::Result<Option<std::net::Ipv4Addr>> {
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: `head` is null on entry; on success getifaddrs(3) allocates the
+    // interface list and stores it in `head`. `InterfaceList` releases it.
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let _list = InterfaceList { head };
+    let mut cursor = head;
+    while !cursor.is_null() {
+        // SAFETY: `cursor` points at a valid entry of the list returned by
+        // getifaddrs(3).
+        let entry = unsafe { &*cursor };
+        let matched = !entry.ifa_name.is_null()
+            // SAFETY: ifa_name is a NUL-terminated string owned by the list.
+            && unsafe { CStr::from_ptr(entry.ifa_name) }.to_str() == Ok(name);
+        if matched {
+            if let Some(address) = ipv4_of(entry.ifa_addr) {
+                return Ok(Some(address));
+            }
+        }
+        cursor = entry.ifa_next;
+    }
+    Ok(None)
+}
+
+/// Owns the linked list returned by `getifaddrs(3)` and frees it on drop.
+struct InterfaceList {
+    head: *mut libc::ifaddrs,
+}
+
+impl Drop for InterfaceList {
+    fn drop(&mut self) {
+        if !self.head.is_null() {
+            // SAFETY: `head` was returned by getifaddrs(3) and is non-null.
+            unsafe { libc::freeifaddrs(self.head) };
+        }
+    }
+}
+
+/// Read the IPv4 address out of a `sockaddr`, if it holds one.
+fn ipv4_of(address: *const libc::sockaddr) -> Option<std::net::Ipv4Addr> {
+    if address.is_null() {
+        return None;
+    }
+    // SAFETY: `address` points at a valid sockaddr inside the getifaddrs
+    // list; only `sa_family` is read before the pointer is reinterpreted.
+    let family = unsafe { (*address).sa_family };
+    if family != libc::AF_INET as libc::sa_family_t {
+        return None;
+    }
+    // SAFETY: the family is AF_INET, so the storage is a `sockaddr_in`.
+    let addr = unsafe { &*(address as *const libc::sockaddr_in) };
+    let octets = addr.sin_addr.s_addr.to_ne_bytes();
+    Some(std::net::Ipv4Addr::new(
+        octets[0], octets[1], octets[2], octets[3],
+    ))
+}

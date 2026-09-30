@@ -14,6 +14,7 @@ path = "src/main.rs"
 jobwrap-core = { workspace = true }
 jobwrap-config = { workspace = true }
 jobwrap-protocol = { workspace = true }
+jobwrap-pty = { workspace = true }
 jobwrap-store = { workspace = true }
 jobwrap-auth = { workspace = true }
 jobwrap-web = { workspace = true }

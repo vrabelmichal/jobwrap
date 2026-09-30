@@ -742,6 +742,7 @@ dependencies = [
  "jobwrap-config",
  "jobwrap-core",
  "jobwrap-protocol",
+ "jobwrap-pty",
  "jobwrap-store",
  "jobwrap-web",
  "nix",
