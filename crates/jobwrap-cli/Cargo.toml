@@ -30,12 +30,16 @@ base64 = { workspace = true }
 fd-lock = { workspace = true }
 
 [package.metadata.deb]
-maintainer = "jobwrap contributors"
+name = "jobwrap"
+maintainer = "jobwrap contributors <maintainers@example.invalid>"
 copyright = "2026, jobwrap contributors"
 license-file = ["../../LICENSE", "0"]
 section = "utils"
 priority = "optional"
+suggests = "bash-completion, jobwrap-codex-skills"
 assets = [
+  ["target/release/jobwrap", "usr/bin/jobwrap", "755"],
+  ["target/release/jobwrapd", "usr/libexec/jobwrap/jobwrapd", "755"],
   ["../../packaging/man/jobwrap.1", "usr/share/man/man1/", "644"],
   ["../../packaging/man/jobwrap.toml.5", "usr/share/man/man5/", "644"],
   ["../../packaging/man/jobwrapd.8", "usr/share/man/man8/", "644"],
@@ -43,7 +47,6 @@ assets = [
   ["../../packaging/completions/_jobwrap", "usr/share/zsh/vendor-completions/_jobwrap", "644"],
   ["../../packaging/completions/jobwrap.fish", "usr/share/fish/vendor_completions.d/jobwrap.fish", "644"],
   ["../../packaging/systemd/jobwrapd.service", "usr/lib/systemd/user/", "644"],
-  ["../../packaging/systemd/jobwrapd.socket", "usr/lib/systemd/user/", "644"],
   ["../../README.md", "usr/share/doc/jobwrap/README.md", "644"],
   ["../../CHANGELOG.md", "usr/share/doc/jobwrap/changelog", "644"],
 ]

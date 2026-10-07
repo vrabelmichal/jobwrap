@@ -3,7 +3,7 @@ Description=jobwrap per-user daemon
 Documentation=man:jobwrapd(8)
 
 [Service]
-Type=notify
+Type=simple
 ExecStart=/usr/libexec/jobwrap/jobwrapd --foreground
 Restart=on-failure
 

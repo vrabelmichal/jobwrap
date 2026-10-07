@@ -51,10 +51,11 @@ Send SIGTERM to a job's process group.
 .B open [\fIJOB\fR]
 Open the web interface in a browser.
 .TP
-.B daemon status|start|stop
-Manage the per-user daemon.
+.B daemon status|start|stop|restart
+Manage the per-user daemon. Use \fBdaemon start \-\-foreground\fR to run
+attached to the terminal.
 .TP
-.B config init|validate|effective|explain
+.B config path|init|validate|effective|explain
 Manage the configuration.
 .TP
 .B auth set-password|remove-password|status
@@ -62,6 +63,22 @@ Manage the browser password.
 .TP
 .B token create|list|revoke
 Manage scoped API tokens.
+.TP
+.B attach \fIJOB\fR
+Reserved for experimental interactive attachment; currently returns an error.
+.TP
+.B launch \fIEXECUTABLE\fR [\fIARGS\fR...]
+Experimental daemon-side launch. Disabled by default; requires explicit
+configuration. See \fBjobwrap launch \-\-help\fR for options.
+.TP
+.B attach-launch \fILAUNCH_ID\fR
+Internal one-time launch helper used by the daemon's terminal backends.
+.TP
+.B inspect \fITARGET\fR
+Inspect static executable metadata and man pages.
+.TP
+.B terminals
+List registered terminals.
 .SH EXIT STATUS
 The wrapper returns the child's exit code. Signals are reported as 128 plus the
 signal number. Internal failures before the child starts use dedicated codes.
@@ -79,7 +96,7 @@ SQLite database.
 .I ~/.local/state/jobwrap/logs/
 Append-only terminal logs.
 .SH SECURITY
-See \fI/usr/share/doc/jobwrap/README.md\fR and the security model. The daemon
+See \fI/usr/share/doc/jobwrap/README.md.gz\fR and the security model. The daemon
 is restricted to loopback. Daemon/API process creation is disabled by default.
 .SH SEE ALSO
 .BR jobwrapd (8),

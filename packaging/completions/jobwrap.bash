@@ -3,20 +3,21 @@ _jobwrap() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local subcommands="list show logs attach signal stop open daemon config auth token version help"
+    local subcommands="wrap list show logs attach signal stop open daemon config auth token launch attach-launch inspect terminals help"
+
+    COMPREPLY=()
+    if [[ "${COMP_WORDS[1]}" == signal && "$COMP_CWORD" == 3 ]]; then
+        COMPREPLY=( $(compgen -W "int term hup quit stop cont kill" -- "$cur") )
+        return
+    fi
 
     case "$prev" in
         show|logs|attach|signal|stop|open)
-            local jobs=$(jobwrap list 2>/dev/null | awk 'NR>1 {print $1}')
-            COMPREPLY=( $(compgen -W "$jobs" -- "$cur") )
-            return
-            ;;
-        signal)
-            COMPREPLY=( $(compgen -W "int term hup quit stop cont kill" -- "$cur") )
+            # Do not start the daemon or expose job output when the user presses Tab.
             return
             ;;
         daemon)
-            COMPREPLY=( $(compgen -W "status start stop" -- "$cur") )
+            COMPREPLY=( $(compgen -W "status start stop restart" -- "$cur") )
             return
             ;;
         config)
@@ -33,6 +34,11 @@ _jobwrap() {
             ;;
     esac
 
+    if [[ "${COMP_WORDS[1]}" == daemon && "${COMP_WORDS[2]}" == start && "$COMP_CWORD" == 3 ]]; then
+        COMPREPLY=( $(compgen -W "--foreground --help" -- "$cur") )
+        return
+    fi
+
     if [[ "$cur" == -* ]]; then
         COMPREPLY=( $(compgen -W "--name --profile --detach --no-web --no-record --help --version" -- "$cur") )
     else
@@ -41,4 +47,4 @@ _jobwrap() {
     fi
 }
 
-complete -F _jobwrap jobwrap
+complete -o default -F _jobwrap jobwrap

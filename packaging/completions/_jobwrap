@@ -4,6 +4,7 @@
 _jobwrap() {
     local -a subcommands
     subcommands=(
+        'wrap:Run a command under jobwrap'
         'list:List registered jobs'
         'show:Show job details'
         'logs:Print a job output log'
@@ -15,6 +16,11 @@ _jobwrap() {
         'config:Manage configuration'
         'auth:Manage password authentication'
         'token:Manage API tokens'
+        'launch:Launch a managed process (experimental)'
+        'attach-launch:Attach a launch helper'
+        'inspect:Inspect executable metadata'
+        'terminals:List registered terminals'
+        'help:Show help'
     )
 
     if (( CURRENT == 2 )); then
@@ -25,10 +31,16 @@ _jobwrap() {
 
     case "${words[2]}" in
         signal)
-            _values 'signal' int term hup quit stop cont kill
+            if (( CURRENT == 4 )); then
+                _values 'signal' int term hup quit stop cont kill
+            fi
             ;;
         daemon)
-            _values 'action' status start stop
+            if (( CURRENT == 3 )); then
+                _values 'action' status start stop restart
+            elif [[ "${words[3]}" == start ]]; then
+                _values 'option' --foreground --help
+            fi
             ;;
         config)
             _values 'action' path init validate effective explain

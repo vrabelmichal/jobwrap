@@ -80,6 +80,15 @@ launch` API is opt-in; managed and existing-terminal modes deliberately fail
 closed until their lifecycle/control integrations are complete. See
 `docs/security-model.md` and `AUDIT_REPORT.md`.
 
+## Debian packages
+
+Build application and optional Codex skill packages with
+`python3 packaging/build-deb.py`; use `--codex-skills no` to build only the
+application. Manpages and Bash/Zsh/Fish completions are included. Install the
+separate `jobwrap-codex-skills` package only if you want the skill available to
+all machine users. See [Debian packaging](docs/debian-packaging.md) for build
+prerequisites, installation choices, unattended commands, and verification.
+
 ## Development
 
 ```sh

@@ -6,6 +6,11 @@ All notable changes to jobwrap are documented in this file.
 
 ### Added
 
+- A Debian release builder using Cargo and standard Debian tools, including
+  automatic library dependencies, compressed manpages, shell completions, and
+  a separately selectable `jobwrap-codex-skills` package for system-wide Codex
+  skill discovery. Build and installation choices support unattended use.
+
 - Web interface: a "new job" page at `/jobs/new` (linked from the jobs list)
   so logged-in users can create processes from the browser. It submits the
   same `POST /api/v1/launch` API as the CLI, submits arguments as a
@@ -37,6 +42,12 @@ All notable changes to jobwrap are documented in this file.
   `not running` (exit 0) when no daemon is up, instead of failing.
 
 ### Fixed
+
+- Debian package metadata now names the package `jobwrap` and includes both
+  executables. Shell completions include current subcommands and daemon options;
+  signal completion uses the correct argument position and never starts the
+  daemon. The packaged user service uses `Type=simple`; the unsupported socket
+  activation prototype is no longer included.
 
 - Web status badges now share consistent sizing across states and pages.
   Warning messages no longer override warning badge padding, and compact
