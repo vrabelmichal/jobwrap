@@ -89,6 +89,11 @@ separate `jobwrap-codex-skills` package only if you want the skill available to
 all machine users. See [Debian packaging](docs/debian-packaging.md) for build
 prerequisites, installation choices, unattended commands, and verification.
 
+Publish downloadable packages on GitHub with
+`python3 packaging/release-github.py --maintainer 'Name <your-real-email>'`.
+Use `--dry-run` for a local preview or `--draft` to upload a draft release.
+See [GitHub releases](docs/github-releases.md) for the release workflow.
+
 ## Development
 
 ```sh

@@ -6,6 +6,11 @@ All notable changes to jobwrap are documented in this file.
 
 ### Added
 
+- A single GitHub release script that builds and verifies both Debian packages,
+  publishes them with SHA-256 checksums through `gh`, and tags the exact source
+  commit. Local previews, drafts, prereleases, and packaging revisions are
+  supported without overwriting existing releases or tags.
+
 - A Debian release builder using Cargo and standard Debian tools, including
   automatic library dependencies, compressed manpages, shell completions, and
   a separately selectable `jobwrap-codex-skills` package for system-wide Codex
