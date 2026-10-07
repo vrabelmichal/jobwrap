@@ -460,16 +460,71 @@ fn read_secret() -> anyhow::Result<String> {
         .read(true)
         .write(true)
         .open(tty_path)?;
+    read_secret_from(tty)
+}
+
+fn read_secret_from(tty: std::fs::File) -> anyhow::Result<String> {
     let fd = std::os::unix::io::AsRawFd::as_raw_fd(&tty);
     let saved = jobwrap_pty::SavedTerminal::capture(fd);
     let _guard = jobwrap_pty::TerminalGuard::new(&saved);
     let mut attrs = jobwrap_pty::ffi::tcgetattr(fd)?;
     attrs.c_lflag &= !libc::ECHO;
-    let _ = jobwrap_pty::ffi::tcsetattr(fd, libc::TCSANOW, &attrs);
+    jobwrap_pty::ffi::tcsetattr(fd, libc::TCSANOW, &attrs)?;
     let mut line = String::new();
-    std::io::BufRead::read_line(&mut std::io::BufReader::new(tty), &mut line)?;
+    // Borrow the file: the restoration guard must run before its descriptor
+    // closes, including when read_line returns an error.
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(&tty), &mut line)?;
     eprintln!();
     Ok(line.trim_end_matches(['\n', '\r']).to_string())
+}
+
+#[cfg(test)]
+mod password_tests {
+    use super::read_secret_from;
+    use std::fs::File;
+    use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant};
+
+    fn read_on_pty(input: &[u8]) -> (anyhow::Result<String>, libc::tcflag_t, libc::tcflag_t) {
+        let mut pty = jobwrap_pty::PseudoTerminal::allocate().expect("allocate terminal");
+        let tty = File::from(pty.take_slave().expect("slave descriptor"));
+        let monitor = tty.try_clone().expect("monitor terminal");
+        let fd = monitor.as_raw_fd();
+        let before = jobwrap_pty::ffi::tcgetattr(fd).expect("original attributes");
+        assert_ne!(before.c_lflag & libc::ECHO, 0);
+        let reader = std::thread::spawn(move || read_secret_from(tty));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while jobwrap_pty::ffi::tcgetattr(fd)
+            .expect("read attributes")
+            .c_lflag
+            & libc::ECHO
+            != 0
+        {
+            assert!(
+                Instant::now() < deadline,
+                "password reader never disabled echo"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        jobwrap_pty::relay::write_input(&pty, input).expect("send input");
+        let result = reader.join().expect("password reader completed");
+        let after = jobwrap_pty::ffi::tcgetattr(fd).expect("restored attributes");
+        (result, before.c_lflag, after.c_lflag)
+    }
+
+    #[test]
+    fn password_read_restores_echo() {
+        let (result, before, after) = read_on_pty(b"test-password\n");
+        assert_eq!(result.expect("read password"), "test-password");
+        assert_eq!(after, before, "password input must restore terminal flags");
+    }
+
+    #[test]
+    fn password_read_error_restores_echo() {
+        let (result, before, after) = read_on_pty(b"\xff\n");
+        assert!(result.is_err(), "invalid UTF-8 must fail the line read");
+        assert_eq!(after, before, "read errors must restore terminal flags");
+    }
 }
 
 fn token(action: TokenCommand) -> anyhow::Result<()> {

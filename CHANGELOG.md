@@ -84,6 +84,15 @@ All notable changes to jobwrap are documented in this file.
   connection is labeled separately from the job state instead of appearing as
   an unexplained `disconnected` status.
 
+## [0.1.1] - 2026-10-07
+
+### Fixed
+
+- `jobwrap auth set-password` restores terminal echo after reading the password,
+  including read failures. The password reader now borrows its terminal file so
+  the restoration guard runs before the file descriptor closes. Failures to
+  disable echo are reported instead of reading a password with echo enabled.
+
 ## [0.1.0] - 2026-08-01
 
 ### Added
