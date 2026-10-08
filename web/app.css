@@ -18,6 +18,8 @@
 * { box-sizing: border-box; }
 
 body {
+  display: flex;
+  flex-direction: column;
   margin: 0;
   min-height: 100vh;
   background: var(--bg);
@@ -26,6 +28,14 @@ body {
 }
 
 a { color: var(--accent); }
+.build-footer {
+  margin-top: auto;
+  padding: 1rem 1.25rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
 button, input, textarea, select { font: inherit; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: 2px solid var(--accent);

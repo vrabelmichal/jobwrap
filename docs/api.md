@@ -28,9 +28,14 @@ Stable error codes: `bad_request`, `unauthorized`, `permission_denied`,
 
 ## Read endpoints
 
+`GET /api/v1/server` reports `version`, the full `git_commit`, and
+`build_dirty`, alongside the server's authentication and bind settings.
+The version matches the application's GitHub release (`vVERSION`) and the
+upstream part of its Debian package version (`VERSION-REVISION`).
+
 | Method | Path                          | Notes                          |
 |--------|-------------------------------|--------------------------------|
-| GET    | `/api/v1/server`              | version, auth required, bind   |
+| GET    | `/api/v1/server`              | version, source commit, build state, auth required, bind |
 | GET    | `/api/v1/auth`                | current session state          |
 | GET    | `/api/v1/jobs`                | job summaries visible to you   |
 | GET    | `/api/v1/jobs/{job_id}`       | non-sensitive status detail    |

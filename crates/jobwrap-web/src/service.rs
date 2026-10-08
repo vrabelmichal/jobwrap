@@ -11,6 +11,8 @@ use crate::events::ServerEvent;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerInfo {
     pub version: String,
+    pub git_commit: String,
+    pub build_dirty: bool,
     pub auth_required: bool,
     pub bind: String,
     pub port: u16,

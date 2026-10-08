@@ -9,6 +9,22 @@ use jobwrap_core::JobRecord;
 pub const APP_JS: &str = include_str!("../../../web/app.js");
 pub const APP_CSS: &str = include_str!("../../../web/app.css");
 
+/// Add the same build identity to every server-rendered page, including login
+/// and error pages. It remains visible without JavaScript or authentication.
+pub fn with_build_footer(html: &str) -> String {
+    use jobwrap_core::build_info::{BUILD_DIRTY, GIT_COMMIT, VERSION};
+    let commit = &GIT_COMMIT[..GIT_COMMIT.len().min(12)];
+    let modified = if BUILD_DIRTY {
+        " · modified sources"
+    } else {
+        ""
+    };
+    let footer = format!(
+        r#"<footer class="build-footer" aria-label="Build information">jobwrap {VERSION} · commit <code title="{GIT_COMMIT}">{commit}</code>{modified}</footer></body>"#
+    );
+    html.replacen("</body>", &footer, 1)
+}
+
 const AUTH_CONTROLS: &str = r#"<div class="auth-controls" data-auth-controls>
   <span class="status-pill neutral">Session: checking…</span>
 </div>"#;
@@ -501,6 +517,25 @@ mod tests {
     fn pages_share_authentication_controls() {
         assert!(index_page("[]", false).contains("data-auth-controls"));
         assert!(login_page("/").contains("data-auth-controls"));
+    }
+
+    #[test]
+    fn build_identity_is_visible_on_public_login_and_error_pages() {
+        use jobwrap_core::build_info::{GIT_COMMIT, VERSION};
+        for page in [
+            index_page("[]", false),
+            login_page("/"),
+            login_required_page("/jobs/01M4C70AH3D4R07FZJHRTYNPRA"),
+            not_found_page("missing"),
+            error_page("denied"),
+            new_job_page(&ready_capabilities(), false),
+        ] {
+            let page = with_build_footer(&page);
+            assert!(page.contains(&format!("jobwrap {VERSION}")));
+            assert!(page.contains(&format!("title=\"{GIT_COMMIT}\"")));
+            assert_eq!(page.matches("<footer ").count(), 1);
+            assert!(page.find("<footer ") < page.find("</body>"));
+        }
     }
 
     #[test]

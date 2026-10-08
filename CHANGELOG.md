@@ -84,6 +84,26 @@ All notable changes to jobwrap are documented in this file.
   connection is labeled separately from the job state instead of appearing as
   an unexplained `disconnected` status.
 
+## [0.1.2] - 2026-10-08
+
+### Added
+
+- Consistent build identity in `jobwrap --version`, `jobwrapd --version`,
+  `GET /api/v1/server`, and a footer on every web page. It includes the
+  application version, source Git commit, and whether sources were modified
+  at build time. `-V` retains the short version output.
+- Debian verification checks the packaged binaries against the package's
+  upstream version and the source commit used for the build.
+
+### Fixed
+
+- Browser sessions use `SameSite=Lax` so job links shared by agents can be
+  opened with an existing login. State-changing requests keep their
+  same-origin protection.
+- Private job pages offer login and return to the requested job after
+  successful authentication. Login return destinations are restricted to
+  application pages.
+
 ## [0.1.1] - 2026-10-07
 
 ### Fixed

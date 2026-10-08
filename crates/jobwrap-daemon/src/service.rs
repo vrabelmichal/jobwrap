@@ -21,7 +21,7 @@ impl DaemonService {
     pub fn new(registry: Arc<Registry>) -> Self {
         Self {
             registry,
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: jobwrap_core::build_info::VERSION.to_string(),
         }
     }
 }
@@ -204,6 +204,8 @@ impl JobService for DaemonService {
         let config = &self.registry.config;
         ServerInfo {
             version: self.version.clone(),
+            git_commit: jobwrap_core::build_info::GIT_COMMIT.to_string(),
+            build_dirty: jobwrap_core::build_info::BUILD_DIRTY,
             auth_required: self.registry.auth().password_set(),
             bind: config.server.bind.clone(),
             port: config.server.port,

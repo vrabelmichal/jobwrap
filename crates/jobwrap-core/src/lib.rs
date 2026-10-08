@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 mod access;
+pub mod build_info;
 mod error;
 mod event;
 mod job;

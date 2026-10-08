@@ -75,7 +75,7 @@ fn job_id(path: &str) -> Result<JobId, ApiError> {
 }
 
 fn render(html: String) -> Response {
-    Html(html).into_response()
+    Html(assets::with_build_footer(&html)).into_response()
 }
 
 // ---- Pages ----
@@ -184,6 +184,8 @@ pub async fn server_info(State(state): State<RouterState>) -> impl IntoResponse 
     let info = state.service.server_info();
     Json(json!({
         "version": info.version,
+        "git_commit": info.git_commit,
+        "build_dirty": info.build_dirty,
         "auth_required": info.auth_required,
         "bind": info.bind,
         "port": info.port,

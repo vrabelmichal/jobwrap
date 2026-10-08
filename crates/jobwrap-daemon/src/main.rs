@@ -26,7 +26,9 @@ use jobwrap_web::build_router;
 use registry::Registry;
 
 #[derive(Debug, Parser)]
-#[command(name = "jobwrapd", version, about = "The per-user jobwrap daemon.")]
+#[command(name = "jobwrapd", version = jobwrap_core::build_info::VERSION,
+    long_version = jobwrap_core::build_info::LONG_VERSION,
+    about = "The per-user jobwrap daemon.")]
 struct DaemonCli {
     /// Path to the Unix socket (defaults to the XDG runtime dir).
     #[arg(long)]

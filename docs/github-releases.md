@@ -66,6 +66,12 @@ assuming binaries built on a newer machine will run on older distributions.
 This command publishes one native architecture per release; it does not build
 a cross-platform matrix or establish an APT repository.
 
+The committed Cargo workspace version supplies the binary/API/footer version,
+the `vVERSION` release tag, and the `VERSION-REVISION` Debian package version.
+Release binaries embed the full source commit and report a clean build; the
+package verification checks both executables against the package version and
+current source commit. Source builds without Git metadata report `unknown`.
+
 Verify the release orchestration without contacting GitHub:
 
 ```sh

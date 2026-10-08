@@ -30,7 +30,8 @@ pub const RESERVED_SUBCOMMANDS: &[&str] = &[
 #[derive(Debug, Parser)]
 #[command(
     name = "jobwrap",
-    version,
+    version = jobwrap_core::build_info::VERSION,
+    long_version = jobwrap_core::build_info::LONG_VERSION,
     about = "Wrap a locally launched Linux process and securely expose monitoring and narrowly authorized control.",
     after_help = "If the first word is not a jobwrap subcommand it is treated as the\n\
                   command to run, so `jobwrap python3 analysis.py` works directly.\n\
