@@ -15,6 +15,7 @@ use jobwrap_web::service::{JobService, ServerInfo};
 pub struct DaemonService {
     registry: Arc<Registry>,
     version: String,
+    host_name: String,
 }
 
 impl DaemonService {
@@ -22,6 +23,11 @@ impl DaemonService {
         Self {
             registry,
             version: jobwrap_core::build_info::VERSION.to_string(),
+            host_name: nix::unistd::gethostname()
+                .map(|name| name.to_string_lossy().into_owned())
+                .ok()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "unknown".to_string()),
         }
     }
 }
@@ -204,6 +210,7 @@ impl JobService for DaemonService {
         let config = &self.registry.config;
         ServerInfo {
             version: self.version.clone(),
+            host_name: self.host_name.clone(),
             git_commit: jobwrap_core::build_info::GIT_COMMIT.to_string(),
             build_dirty: jobwrap_core::build_info::BUILD_DIRTY,
             auth_required: self.registry.auth().password_set(),

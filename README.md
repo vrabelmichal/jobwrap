@@ -54,9 +54,10 @@ terminal instead of the background.
 `jobwrap --version` and `jobwrapd --version` report the application version,
 source Git commit, and whether the build included uncommitted changes. Use
 `-V` for the short version. `GET /api/v1/server` exposes the same information
-as `version`, `git_commit`, and `build_dirty`; every web page has a build
-information footer. Builds from source archives without Git metadata report
-the commit as `unknown`.
+as `version`, `git_commit`, `build_dirty`, and `host_name`; every web page
+starts its tab title with the hostname and shows the hostname in the header,
+alongside its build information footer. Builds from source archives without
+Git metadata report the commit as `unknown`.
 
 The workspace version is the source of truth: application `0.1.2` is released
 as GitHub tag `v0.1.2` and Debian packages `0.1.2-1`, where `-1` is the Debian

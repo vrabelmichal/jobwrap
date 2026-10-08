@@ -11,8 +11,9 @@ pub const APP_CSS: &str = include_str!("../../../web/app.css");
 
 /// Add the same build identity to every server-rendered page, including login
 /// and error pages. It remains visible without JavaScript or authentication.
-pub fn with_build_footer(html: &str) -> String {
+pub fn with_build_footer(html: &str, host_name: &str) -> String {
     use jobwrap_core::build_info::{BUILD_DIRTY, GIT_COMMIT, VERSION};
+    let host_name = html_escape(host_name);
     let commit = &GIT_COMMIT[..GIT_COMMIT.len().min(12)];
     let modified = if BUILD_DIRTY {
         " · modified sources"
@@ -22,7 +23,14 @@ pub fn with_build_footer(html: &str) -> String {
     let footer = format!(
         r#"<footer class="build-footer" aria-label="Build information">jobwrap {VERSION} · commit <code title="{GIT_COMMIT}">{commit}</code>{modified}</footer></body>"#
     );
-    html.replacen("</body>", &footer, 1)
+    let titled = html.replacen("<title>", &format!("<title>{host_name} · "), 1);
+    let branded = titled.replace(
+        "<a href=\"/\" class=\"brand-link\">jobwrap</a>",
+        &format!(
+            "<a href=\"/\" class=\"brand-link\">jobwrap <span class=\"brand-host\">{host_name}</span></a>"
+        ),
+    );
+    branded.replacen("</body>", &footer, 1)
 }
 
 const AUTH_CONTROLS: &str = r#"<div class="auth-controls" data-auth-controls>
@@ -530,7 +538,7 @@ mod tests {
             error_page("denied"),
             new_job_page(&ready_capabilities(), false),
         ] {
-            let page = with_build_footer(&page);
+            let page = with_build_footer(&page, "vrabel-desktop");
             assert!(page.contains(&format!("jobwrap {VERSION}")));
             assert!(page.contains(&format!("title=\"{GIT_COMMIT}\"")));
             assert_eq!(page.matches("<footer ").count(), 1);

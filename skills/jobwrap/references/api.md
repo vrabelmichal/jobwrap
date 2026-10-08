@@ -29,7 +29,7 @@ curl --fail-with-body --max-time 15 \
 
 | GET path (relative to `/api/v1`) | Response/use |
 | --- | --- |
-| `/server` | Version, `auth_required`, bind, port |
+| `/server` | Hostname, version, source commit, dirty-build flag, auth, bind, and port |
 | `/auth` | `authenticated`, `password_set` |
 | `/jobs` | Array of visible summaries; uses `display_name`, `profile_name`, `state`, and log counters |
 | `/jobs/{id}` | Status object: `id`, `name`, `profile`, `state`, timestamps, `terminal_attached` |

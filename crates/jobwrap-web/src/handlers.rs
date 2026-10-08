@@ -74,8 +74,8 @@ fn job_id(path: &str) -> Result<JobId, ApiError> {
     path.parse().map_err(|_| ApiError::not_found("no such job"))
 }
 
-fn render(html: String) -> Response {
-    Html(assets::with_build_footer(&html)).into_response()
+fn render(html: String, host_name: &str) -> Response {
+    Html(assets::with_build_footer(&html, host_name)).into_response()
 }
 
 // ---- Pages ----
@@ -85,7 +85,10 @@ pub async fn index(State(state): State<RouterState>, headers: HeaderMap) -> Resp
     let jobs = state.service.list_jobs(&principal);
     let jobs_json = serde_json::to_string(&jobs).unwrap_or_else(|_| "[]".into());
     let authenticated = !matches!(principal, Principal::Anonymous);
-    render(assets::index_page(&jobs_json, authenticated))
+    render(
+        assets::index_page(&jobs_json, authenticated),
+        &state.service.server_info().host_name,
+    )
 }
 
 pub async fn jobs_index(State(state): State<RouterState>, headers: HeaderMap) -> Response {
@@ -96,7 +99,10 @@ pub async fn new_job_page(State(state): State<RouterState>, headers: HeaderMap) 
     let principal = principal_from_headers(service(&state), &headers);
     let authenticated = !matches!(principal, Principal::Anonymous);
     let capabilities = state.service.launch_capabilities();
-    render(assets::new_job_page(&capabilities, authenticated))
+    render(
+        assets::new_job_page(&capabilities, authenticated),
+        &state.service.server_info().host_name,
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,10 +127,14 @@ fn login_return_to(requested: Option<&str>) -> &str {
     }
 }
 
-pub async fn login_page(Query(query): Query<LoginQuery>) -> Response {
-    render(assets::login_page(login_return_to(
-        query.return_to.as_deref(),
-    )))
+pub async fn login_page(
+    State(state): State<RouterState>,
+    Query(query): Query<LoginQuery>,
+) -> Response {
+    render(
+        assets::login_page(login_return_to(query.return_to.as_deref())),
+        &state.service.server_info().host_name,
+    )
 }
 
 pub async fn job_page(
@@ -134,11 +144,19 @@ pub async fn job_page(
 ) -> Response {
     let id = match job_id(&job) {
         Ok(id) => id,
-        Err(_) => return render(assets::not_found_page(&job)),
+        Err(_) => {
+            return render(
+                assets::not_found_page(&job),
+                &state.service.server_info().host_name,
+            )
+        }
     };
     let principal = principal_from_headers(service(&state), &headers);
     match state.service.get_job(&principal, id) {
-        Ok(record) => render(assets::job_page(&record)),
+        Ok(record) => render(
+            assets::job_page(&record),
+            &state.service.server_info().host_name,
+        ),
         Err(error)
             if matches!(principal, Principal::Anonymous)
                 && matches!(
@@ -148,9 +166,15 @@ pub async fn job_page(
                 )
                 && state.service.server_info().auth_required =>
         {
-            render(assets::login_required_page(&format!("/jobs/{id}")))
+            render(
+                assets::login_required_page(&format!("/jobs/{id}")),
+                &state.service.server_info().host_name,
+            )
         }
-        Err(ApiError { message, .. }) => render(assets::error_page(&message)),
+        Err(ApiError { message, .. }) => render(
+            assets::error_page(&message),
+            &state.service.server_info().host_name,
+        ),
     }
 }
 
@@ -184,6 +208,7 @@ pub async fn server_info(State(state): State<RouterState>) -> impl IntoResponse 
     let info = state.service.server_info();
     Json(json!({
         "version": info.version,
+        "host_name": info.host_name,
         "git_commit": info.git_commit,
         "build_dirty": info.build_dirty,
         "auth_required": info.auth_required,

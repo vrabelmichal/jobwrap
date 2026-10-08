@@ -6,6 +6,9 @@ All notable changes to jobwrap are documented in this file.
 
 ### Added
 
+- Browser tab titles and page headers identify the machine serving the jobwrap
+  interface. `GET /api/v1/server` also reports the hostname.
+
 - A single GitHub release script that builds and verifies both Debian packages,
   publishes them with SHA-256 checksums through `gh`, and tags the exact source
   commit. Local previews, drafts, prereleases, and packaging revisions are

@@ -70,6 +70,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   min-width: 0;
 }
 .header-primary { flex: 1; }
+.brand-host { color: var(--muted); font-size: 0.78em; font-weight: 500; }
 .header-actions { justify-content: flex-end; flex-wrap: wrap; }
 .auth-controls { gap: 0.45rem; }
 
