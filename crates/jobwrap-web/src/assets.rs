@@ -140,6 +140,7 @@ pub fn job_page(record: &JobRecord) -> String {
   </div>
 </header>
 <main id="job-details" class="job-main" data-job="{}">
+  <p id="wrapper-status-note" class="muted" hidden>The wrapper connection is lost. The workload may still be running; its exit status is unknown. Live output and control are unavailable. Check the workload's own log before considering a restart.</p>
   <div class="details-layout">
     <section class="card overview-card">
       <div class="section-heading">

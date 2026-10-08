@@ -527,12 +527,8 @@ impl Registry {
         let new_state = match event {
             jobwrap_protocol::WrapperToDaemon::Stopped => Some(JobState::Stopped),
             jobwrap_protocol::WrapperToDaemon::Continued => Some(JobState::Running),
-            jobwrap_protocol::WrapperToDaemon::Exited { code } => {
-                job.record.finished_at = Some(Utc::now());
-                Some(JobState::Exited { code })
-            }
+            jobwrap_protocol::WrapperToDaemon::Exited { code } => Some(JobState::Exited { code }),
             jobwrap_protocol::WrapperToDaemon::Signaled { signal } => {
-                job.record.finished_at = Some(Utc::now());
                 Some(JobState::Signaled { signal })
             }
             jobwrap_protocol::WrapperToDaemon::Ready => None,
@@ -541,12 +537,21 @@ impl Registry {
         };
         if let Some(state) = new_state {
             if let Ok(state) = job.record.state.transition(state) {
+                if state.is_finished() {
+                    job.record.finished_at = Some(Utc::now());
+                }
                 job.record.state = state;
-                let _ = self
-                    .store
-                    .lock()
-                    .expect("store lock")
-                    .update_job(&job.record);
+                let store = self.store.lock().expect("store lock");
+                if let Err(error) = store.update_job(&job.record) {
+                    tracing::error!(%job_id, %error, "persisting wrapper state failed");
+                }
+                if let Err(error) = store.insert_event(&Event::new(
+                    job_id,
+                    EventId(0),
+                    EventKind::StateChanged { state },
+                )) {
+                    tracing::error!(%job_id, %error, "persisting wrapper state event failed");
+                }
                 let _ = self
                     .broadcast_tx
                     .send(jobwrap_web::ServerEvent::StateChanged { job_id, state });
@@ -555,17 +560,32 @@ impl Registry {
     }
 
     /// Mark a wrapper as disconnected but keep the job alive.
-    pub fn wrapper_disconnected(&self, job_id: JobId) {
+    pub fn wrapper_disconnected(&self, job_id: JobId, reason: &str) {
         let mut jobs = self.jobs.lock().expect("jobs lock");
         if let Some(job) = jobs.get_mut(&job_id) {
             job.wrapper_tx = None;
+            if job.record.state.is_finished() || job.record.state == JobState::Disconnected {
+                return;
+            }
             if let Ok(state) = job.record.state.transition(JobState::Disconnected) {
                 job.record.state = state;
+                let store = self.store.lock().expect("store lock");
+                if let Err(error) = store.update_job(&job.record) {
+                    tracing::error!(%job_id, %error, "persisting wrapper disconnection failed");
+                }
+                for kind in [
+                    EventKind::WrapperDisconnected,
+                    EventKind::Audit { detail: format!("Wrapper connection lost: {reason}. Child outcome is unknown; the workload may still be running.") },
+                    EventKind::StateChanged { state },
+                ] {
+                    if let Err(error) = store.insert_event(&Event::new(job_id, EventId(0), kind)) {
+                        tracing::error!(%job_id, %error, "persisting wrapper disconnection event failed");
+                    }
+                }
+                tracing::warn!(%job_id, reason, "wrapper disconnected; child outcome unknown");
                 let _ = self
-                    .store
-                    .lock()
-                    .expect("store lock")
-                    .update_job(&job.record);
+                    .broadcast_tx
+                    .send(jobwrap_web::ServerEvent::StateChanged { job_id, state });
             }
         }
     }

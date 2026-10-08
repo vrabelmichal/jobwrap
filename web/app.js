@@ -369,7 +369,10 @@ function renderJobDetails(data) {
   setText('job-id', data.id);
   setText('job-profile', data.profile);
   setText('job-started', formatDate(data.started_at));
-  setText('job-finished', data.finished_at ? formatDate(data.finished_at) : 'running');
+  const uncertain = ['disconnected', 'lost'].includes(stateType(data.state));
+  setText('job-finished', data.finished_at ? formatDate(data.finished_at) : (uncertain ? 'unknown' : 'not finished'));
+  const wrapperNote = document.getElementById('wrapper-status-note');
+  if (wrapperNote) wrapperNote.hidden = !uncertain;
   setText('job-runtime', formatDuration(data.started_at, data.finished_at));
   setText('job-child-pid', data.child_pid);
   setText('job-wrapper-pid', data.wrapper_pid);

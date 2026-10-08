@@ -160,6 +160,12 @@ async fn handle_wrapper(
         }
     };
     if write_result.is_err() || registered.is_err() {
+        if registered.is_ok() {
+            registry.wrapper_disconnected(
+                job_id,
+                "registration acknowledgement could not be delivered",
+            );
+        }
         return Ok(());
     }
 
@@ -178,9 +184,10 @@ async fn handle_wrapper(
     });
 
     // Stream frames from the wrapper.
-    loop {
-        let Some(msg) = read_request_from(&mut read).await else {
-            break;
+    let disconnect_reason = loop {
+        let msg = match read_request_result(&mut read).await {
+            Ok(msg) => msg,
+            Err(error) => break error.to_string(),
         };
         match msg {
             ClientToDaemon::Output {
@@ -199,19 +206,24 @@ async fn handle_wrapper(
             }
             ClientToDaemon::WrapperExited { code } => {
                 registry.handle_wrapper_event(job_id, WrapperToDaemon::Exited { code });
-                break;
+                break "child exit reported".to_owned();
             }
             ClientToDaemon::WrapperSignaled { signal } => {
                 registry.handle_wrapper_event(job_id, WrapperToDaemon::Signaled { signal });
-                break;
+                break "child termination reported".to_owned();
             }
-            ClientToDaemon::WrapperBye | ClientToDaemon::WrapperTerminalLost => break,
+            ClientToDaemon::WrapperBye => {
+                break "wrapper sent goodbye without a final child status".to_owned()
+            }
+            ClientToDaemon::WrapperTerminalLost => {
+                break "wrapper reported terminal loss".to_owned()
+            }
             _ => {}
         }
-    }
+    };
 
     writer_task.abort();
-    registry.wrapper_disconnected(job_id);
+    registry.wrapper_disconnected(job_id, &disconnect_reason);
     Ok(())
 }
 
@@ -395,19 +407,25 @@ async fn read_request(stream: &mut UnixStream) -> Option<ClientToDaemon> {
 }
 
 async fn read_request_from(read: &mut (impl AsyncReadExt + Unpin)) -> Option<ClientToDaemon> {
+    read_request_result(read).await.ok()
+}
+
+async fn read_request_result(
+    read: &mut (impl AsyncReadExt + Unpin),
+) -> std::io::Result<ClientToDaemon> {
     let mut header = [0u8; 4];
-    if read.read_exact(&mut header).await.is_err() {
-        return None;
-    }
+    read.read_exact(&mut header).await?;
     let len = u32::from_be_bytes(header) as usize;
     if len > jobwrap_protocol::codec::MAX_FRAME_BYTES {
-        return None;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "wrapper frame exceeds size limit",
+        ));
     }
     let mut body = vec![0u8; len];
-    if read.read_exact(&mut body).await.is_err() {
-        return None;
-    }
-    serde_json::from_slice(&body).ok()
+    read.read_exact(&mut body).await?;
+    serde_json::from_slice(&body)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid protocol frame"))
 }
 
 async fn write_response(

@@ -64,3 +64,30 @@ SIGKILL -> process group
   `jobwrap executable arguments...`.
 * When stdin is a pipe that reaches EOF, the child does not see an EOF on its
   PTY input.
+
+## Wrapper lifetime and disconnection
+
+`jobwrap wrap` runs in the foreground; `--detach` is not implemented. An agent
+execution session must remain alive for the entire command. Jobwrap has no
+internal job duration limit, but it cannot prevent a terminal, execution tool,
+or operating system from terminating the wrapper.
+
+If writes to the original terminal fail, the wrapper continues draining the PTY
+and recording output through the daemon. Forwarding TERM/HUP also keeps the
+reader active until PTY EOF so that child signal handlers can finish writing.
+These behaviors do not protect against the wrapper itself being killed.
+
+When the daemon loses the wrapper connection without a final child status, it
+records `disconnected`, a timestamped disconnection event, an audit event with
+the observed connection-loss reason, and a state-change event. It also pushes
+the state change to connected web clients. A socket EOF identifies loss of the
+connection, not the signal or external action that caused the wrapper to exit.
+The finish time remains unknown; `disconnected` does not establish workload
+failure or completion.
+
+There is no wrapper reconnection or adoption of an existing child. If the
+wrapper was the sole owner of the PTY master, its exit loses that monitoring
+channel. A surviving child can still be observed through its own log and Linux
+process information. Do not relaunch a workload solely because its jobwrap
+record is disconnected, and do not send signals to saved PIDs without verifying
+their current identity.

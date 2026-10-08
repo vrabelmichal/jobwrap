@@ -77,30 +77,29 @@ pub fn run_relay(
         }
     }
 
-    let stop = Arc::new(AtomicBool::new(false));
     let child_alive = Arc::new(AtomicBool::new(true));
 
     // --- Reader: PTY master -> stdout + sink. ---
-    let reader_stop = stop.clone();
     let reader = thread::Builder::new()
         .name("jw-reader".into())
         .spawn(move || -> io::Result<()> {
             let mut buf = [0u8; 8192];
+            let mut terminal_output_available = true;
             loop {
-                if reader_stop.load(Ordering::Relaxed) {
-                    break;
-                }
                 let n = match read_raw(master_fd, &mut buf) {
                     Ok(0) => break,
                     Ok(n) => n,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                     Err(_) => break, // EIO after the child closes the slave.
                 };
-                if let Err(e) = write_all_raw(stdout_fd, &buf[..n]) {
-                    tracing::warn!(error = %e, "writing child output to terminal failed");
-                    break;
-                }
                 if let Some(sink) = on_output.as_mut() {
                     sink(&buf[..n]);
+                }
+                if terminal_output_available {
+                    if let Err(e) = write_all_raw(stdout_fd, &buf[..n]) {
+                        tracing::warn!(error = %e, "terminal output unavailable; continuing child output recording");
+                        terminal_output_available = false;
+                    }
                 }
             }
             Ok(())
@@ -203,10 +202,8 @@ pub fn run_relay(
                         if let Some(sink) = on_signal.as_mut() {
                             sink(core_sig);
                         }
-                        // Stop the reader once the child dies for TERM/HUP.
-                        if matches!(other, libc::SIGTERM | libc::SIGHUP) {
-                            stop.store(true, Ordering::Relaxed);
-                        }
+                        // Keep draining until PTY EOF, including output from
+                        // signal handlers and children that ignore TERM/HUP.
                     }
                 }
             }
