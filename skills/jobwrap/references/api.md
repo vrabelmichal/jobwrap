@@ -7,8 +7,12 @@ Use the configured server URL, normally `http://127.0.0.1:8765`, with prefix
 scoped token. Local HTTP is not local-owner authentication; the Unix socket CLI
 has separate owner authority. A browser can instead log in with
 `POST /api/v1/login`, JSON `{"password":"..."}`, and the returned
-`jobwrap_session` cookie (`HttpOnly`, `SameSite=Strict`); logout is
+`jobwrap_session` cookie (`HttpOnly`, `SameSite=Lax`); logout is
 `POST /api/v1/logout`.
+
+Signed-in browsers can open job links shared by other apps. A private job page
+offers login when needed and returns to that job after successful login, using
+`/login?return_to=/jobs/JOB_ID`.
 
 In these examples `JOBWRAP_TOKEN` is supplied securely by the caller, and
 `JOBWRAP_BASE_URL` and `JOBWRAP_JOB_ID` contain the actual address and ID. Avoid

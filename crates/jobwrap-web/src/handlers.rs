@@ -99,8 +99,32 @@ pub async fn new_job_page(State(state): State<RouterState>, headers: HeaderMap) 
     render(assets::new_job_page(&capabilities, authenticated))
 }
 
-pub async fn login_page() -> Response {
-    render(assets::login_page())
+#[derive(Debug, Deserialize)]
+pub struct LoginQuery {
+    return_to: Option<String>,
+}
+
+// Only real application pages are accepted as post-login destinations.
+// In particular, never turn a login link into a redirect to another site.
+fn login_return_to(requested: Option<&str>) -> &str {
+    let Some(path) = requested else {
+        return "/";
+    };
+    if matches!(path, "/" | "/jobs" | "/jobs/new")
+        || path
+            .strip_prefix("/jobs/")
+            .map_or(false, |id| id.parse::<JobId>().is_ok())
+    {
+        path
+    } else {
+        "/"
+    }
+}
+
+pub async fn login_page(Query(query): Query<LoginQuery>) -> Response {
+    render(assets::login_page(login_return_to(
+        query.return_to.as_deref(),
+    )))
 }
 
 pub async fn job_page(
@@ -115,6 +139,17 @@ pub async fn job_page(
     let principal = principal_from_headers(service(&state), &headers);
     match state.service.get_job(&principal, id) {
         Ok(record) => render(assets::job_page(&record)),
+        Err(error)
+            if matches!(principal, Principal::Anonymous)
+                && matches!(
+                    error.code,
+                    jobwrap_protocol::ApiErrorCode::PermissionDenied
+                        | jobwrap_protocol::ApiErrorCode::Unauthorized
+                )
+                && state.service.server_info().auth_required =>
+        {
+            render(assets::login_required_page(&format!("/jobs/{id}")))
+        }
         Err(ApiError { message, .. }) => render(assets::error_page(&message)),
     }
 }
@@ -181,8 +216,10 @@ pub async fn login(
     let service = service(&state);
     match service.login(&req.password) {
         Ok(session_token) => {
+            // Include sessions on shared job links opened as top-level GETs.
+            // State-changing browser requests still go through check_csrf.
             let cookie =
-                format!("{SESSION_COOKIE}={session_token}; Path=/; HttpOnly; SameSite=Strict");
+                format!("{SESSION_COOKIE}={session_token}; Path=/; HttpOnly; SameSite=Lax");
             let mut response = Json(json!({ "ok": true })).into_response();
             let parsed: axum::http::HeaderValue = cookie.parse().expect("valid cookie");
             response
@@ -563,5 +600,49 @@ async fn ws_loop(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_returns_to_app_pages_only() {
+        let job_path = "/jobs/01M4C70AH3D4R07FZJHRTYNPRA";
+        for path in ["/", "/jobs", "/jobs/new", job_path] {
+            assert_eq!(login_return_to(Some(path)), path);
+        }
+        assert_eq!(login_return_to(None), "/");
+        for path in [
+            "https://example.com/",
+            "//example.com/",
+            "/\\example.com/",
+            "/jobs/../login",
+            "/jobs/invalid",
+            "/login",
+            "/jobs/01M4C70AH3D4R07FZJHRTYNPRA?next=https://example.com",
+        ] {
+            assert_eq!(login_return_to(Some(path)), "/");
+        }
+    }
+
+    #[test]
+    fn cross_origin_mutations_remain_rejected() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "host",
+            "jobwrap.example:8790".parse().expect("valid header"),
+        );
+        headers.insert(
+            "origin",
+            "http://other.example".parse().expect("valid header"),
+        );
+        assert!(check_csrf(&headers).is_err());
+        headers.insert(
+            "origin",
+            "http://jobwrap.example:8790".parse().expect("valid header"),
+        );
+        assert!(check_csrf(&headers).is_ok());
     }
 }

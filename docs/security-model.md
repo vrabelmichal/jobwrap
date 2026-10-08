@@ -80,7 +80,9 @@ document.
 * API tokens are random 32-byte values; only their SHA-256 hash is stored;
 * tokens are displayed exactly once at creation;
 * browser sessions are opaque random values; only their hash is stored, in an
-  `HttpOnly` + `SameSite=Strict` cookie.
+  `HttpOnly` + `SameSite=Lax` cookie. Lax allows authenticated navigation to
+  job links shared by agents or other apps; state-changing requests still use
+  the same-origin check below.
 
 ### Rate limiting and abuse
 

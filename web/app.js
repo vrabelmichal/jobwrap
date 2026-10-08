@@ -288,6 +288,8 @@ async function refreshAuthControls() {
       container.innerHTML = '<span class="status-pill success">Authenticated</span><button type="button" class="header-text-button" data-logout>Log out</button>';
     } else {
       container.innerHTML = '<span class="status-pill neutral">Not authenticated</span><a href="/login" class="header-action login-link">Log in</a>';
+      const returnTo = document.getElementById('login-form')?.dataset.returnTo || window.location.pathname;
+      container.querySelector('.login-link').href = `/login?return_to=${encodeURIComponent(returnTo)}`;
     }
   });
 
@@ -587,7 +589,7 @@ function initLoginForm() {
     const password = document.getElementById('password').value;
     try {
       await postJson('/api/v1/login', { password });
-      window.location.href = '/';
+      window.location.href = form.dataset.returnTo || '/';
     } catch (error) {
       errorEl.textContent = 'Incorrect password.';
     }

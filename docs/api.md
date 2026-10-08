@@ -17,7 +17,11 @@ Stable error codes: `bad_request`, `unauthorized`, `permission_denied`,
 ## Authentication
 
 * **Cookie session** — after `POST /api/v1/login`, the `jobwrap_session`
-  cookie is `HttpOnly`, `SameSite=Strict`.
+  cookie is `HttpOnly`, `SameSite=Lax`, allowing authenticated navigation from
+  links shared by other apps. State-changing browser requests remain subject
+  to the same-origin check. An unauthenticated private job page offers a login
+  link that returns to the job after login. `/login?return_to=/jobs/JOB_ID`
+  preserves that destination; unsupported destinations fall back to `/`.
 * **Bearer token** — `Authorization: Bearer <token>` for agent use.
 * **Local owner** — the CLI talks over the private Unix socket and is treated
   as the owner.

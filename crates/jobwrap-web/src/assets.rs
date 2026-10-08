@@ -381,7 +381,8 @@ fail closed by design (see the security model documentation).</p>";
     )
 }
 
-pub fn login_page() -> String {
+pub fn login_page(return_to: &str) -> String {
+    let return_to = html_attribute_escape(return_to);
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -407,8 +408,8 @@ pub fn login_page() -> String {
     <div class="section-heading">
       <div><span class="eyebrow">controller access</span><h2>Authenticate to jobwrap</h2></div>
     </div>
-    <p class="muted">Log in to view protected command details and use controls allowed by each job's access policy.</p>
-    <form id="login-form" class="login-form">
+    <p class="muted">Log in to view private jobs and protected command details, and use controls allowed by each job's access policy.</p>
+    <form id="login-form" class="login-form" data-return-to="{return_to}">
       <label for="password">Password</label>
       <input type="password" id="password" name="password" autocomplete="current-password" autofocus>
       <button type="submit">Log in</button>
@@ -430,6 +431,17 @@ pub fn not_found_page(id: &str) -> String {
 <header class="app-header"><div class="header-inner"><div class="header-primary"><a href="/" class="brand-link">jobwrap</a><a href="/" class="back-link">&larr; Jobs</a></div><div class="header-actions">{AUTH_CONTROLS}</div></div></header>
 <main class="message-main"><section class="card message-card"><span class="eyebrow">not found</span><h1>Job not found</h1>
 <p>No job with id <code>{id}</code> exists.</p><p><a href="/" class="primary-link inline-action">Back to jobs</a></p></section></main><script src="/static/app.js"></script></body></html>"#
+    )
+}
+
+pub fn login_required_page(job_path: &str) -> String {
+    let job_path = html_attribute_escape(job_path);
+    format!(
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Log in to view this job</title>
+<link rel="stylesheet" href="/static/app.css"></head><body>
+<header class="app-header"><div class="header-inner"><div class="header-primary"><a href="/" class="brand-link">jobwrap</a><a href="/" class="back-link">&larr; Jobs</a></div><div class="header-actions">{AUTH_CONTROLS}</div></div></header>
+<main class="message-main"><section class="card message-card"><span class="eyebrow">login required</span><h1>Log in to view this job</h1>
+<p>This job requires authentication. After logging in, you will return to this job.</p><p><a href="/login?return_to={job_path}" class="primary-link inline-action">Log in</a></p></section></main><script src="/static/app.js"></script></body></html>"#
     )
 }
 
@@ -488,7 +500,17 @@ mod tests {
     #[test]
     fn pages_share_authentication_controls() {
         assert!(index_page("[]", false).contains("data-auth-controls"));
-        assert!(login_page().contains("data-auth-controls"));
+        assert!(login_page("/").contains("data-auth-controls"));
+    }
+
+    #[test]
+    fn private_job_login_preserves_its_destination() {
+        let job_path = "/jobs/01M4C70AH3D4R07FZJHRTYNPRA";
+        let page = login_required_page(job_path);
+        assert!(page.contains(&format!("href=\"/login?return_to={job_path}\"")));
+        assert!(page.contains("Log in to view this job"));
+        let login = login_page(job_path);
+        assert!(login.contains(&format!("data-return-to=\"{job_path}\"")));
     }
 
     #[test]
