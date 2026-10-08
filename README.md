@@ -59,8 +59,8 @@ starts its tab title with the hostname and shows the hostname in the header,
 alongside its build information footer. Builds from source archives without
 Git metadata report the commit as `unknown`.
 
-The workspace version is the source of truth: application `0.1.2` is released
-as GitHub tag `v0.1.2` and Debian packages `0.1.2-1`, where `-1` is the Debian
+The workspace version is the source of truth: application `0.1.3` is released
+as GitHub tag `v0.1.3` and Debian packages `0.1.3-1`, where `-1` is the Debian
 packaging revision.
 
 ## Layout

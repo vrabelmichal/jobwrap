@@ -4,6 +4,7 @@ All notable changes to jobwrap are documented in this file.
 
 ## [Unreleased]
 
+
 ### Added
 
 - Browser tab titles and page headers identify the machine serving the jobwrap
@@ -86,6 +87,23 @@ All notable changes to jobwrap are documented in this file.
   terminal-output, and signal-control sections. The browser's live-output
   connection is labeled separately from the job state instead of appearing as
   an unexplained `disconnected` status.
+
+## [0.1.3] - 2026-10-08
+
+### Added
+
+- Web pages and server metadata identify the host running jobwrap, making
+  browser tabs distinguishable across machines.
+- Shared job links open successfully, and login returns users to the requested
+  job page.
+
+### Fixed
+
+- Continue recording PTY output when the launch terminal becomes unavailable,
+  and drain output after forwarding TERM or HUP.
+- Record and broadcast wrapper disconnections with the observed connection
+  reason. The job page makes clear that a disconnected workload may still be
+  running and its finish status is unknown.
 
 ## [0.1.2] - 2026-10-08
 
