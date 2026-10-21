@@ -143,6 +143,10 @@ separate `jobwrap-codex-skills` package only if you want the skill available to
 all machine users. See [Debian packaging](docs/debian-packaging.md) for build
 prerequisites, installation choices, unattended commands, and verification.
 
+For personal skill discovery in Codex, Kilo, and OpenCode, see
+[Agent skill setup](docs/agent-skills.md). The shared user directory avoids
+maintaining separate copies for each tool.
+
 Publish downloadable packages on GitHub with
 `python3 packaging/release-github.py --maintainer 'Name <your-real-email>'`.
 Use `--dry-run` for a local preview or `--draft` to upload a draft release.
