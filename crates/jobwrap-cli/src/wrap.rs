@@ -25,12 +25,21 @@ use crate::daemon::{build_env, connect_wrapper_stream};
 
 /// Run the wrapped command and return its exit status.
 pub fn run(args: WrapArgs) -> anyhow::Result<i32> {
-    if args.detach {
-        bail!("--detach is not implemented; no command was started");
-    }
     let config = load_config();
     let paths = jobwrap_config::RuntimePaths::discover().context("resolving XDG paths")?;
+    if args.detach {
+        return crate::detached::start(args, &config, &paths);
+    }
+    run_local(args, config, paths, None)
+}
 
+/// Run inside either the launch terminal or an independently started worker.
+pub(crate) fn run_local(
+    args: WrapArgs,
+    config: EffectiveConfig,
+    paths: jobwrap_config::RuntimePaths,
+    job_id: Option<JobId>,
+) -> anyhow::Result<i32> {
     let profile_name = args
         .profile
         .clone()
@@ -73,8 +82,20 @@ pub fn run(args: WrapArgs) -> anyhow::Result<i32> {
     let registration = if args.no_web {
         Err("registration disabled by --no-web".to_string())
     } else {
-        register_with_daemon(&paths, &config, &saved, &child, identity, None)
+        register_with_daemon(&paths, &config, &saved, &child, identity, job_id)
     };
+
+    if args.detach {
+        if let Err(reason) = &registration {
+            // Never leave a detached workload running without a record.
+            // Signal both identities in case the child has not called setsid yet.
+            let pid = nix::unistd::Pid::from_raw(child.pid.0);
+            let _ = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL);
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+            let _ = child::wait_for_child(child.pid, &mut |_| {});
+            bail!("detached job registration failed: {reason}");
+        }
+    }
 
     // Print the banner.
     match &registration {
@@ -108,8 +129,16 @@ pub fn run(args: WrapArgs) -> anyhow::Result<i32> {
         }
     };
 
-    let status =
-        run_relay(&pty, child, 1, Some(0), Some(&saved), sinks, cmd_rx).context("relay failure")?;
+    let status = run_relay(
+        &pty,
+        child,
+        1,
+        if args.detach { None } else { Some(0) },
+        if args.detach { None } else { Some(&saved) },
+        sinks,
+        cmd_rx,
+    )
+    .context("relay failure")?;
 
     // Report the final status to the daemon and drain the writer (best effort,
     // but does not block forever on a dead daemon).
@@ -276,7 +305,7 @@ fn sanitize_char(c: char) -> char {
     }
 }
 
-fn sanitize_name(name: &str) -> String {
+pub(crate) fn sanitize_name(name: &str) -> String {
     let cleaned: String = name.chars().map(sanitize_char).collect();
     if cleaned.is_empty() {
         "job".to_string()

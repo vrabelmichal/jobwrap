@@ -2,11 +2,12 @@
 //!
 //! `jobwrapd` is a per-user daemon. It provides the web interface, HTTP API,
 //! authentication, the live job registry, log storage, and access control. The
-//! wrapped process itself is always created by the `jobwrap` CLI; the daemon
-//! never launches arbitrary processes.
+//! wrapped process itself runs in a `jobwrap` worker. Local detached launches
+//! broker a separate systemd user service; HTTP launches remain opt-in.
 
 #![forbid(unsafe_code)]
 
+mod detached;
 mod docs;
 mod launch;
 mod probe;

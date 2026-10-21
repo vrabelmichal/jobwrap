@@ -55,6 +55,7 @@ pub struct Registry {
     idempotency: Mutex<HashMap<(String, String), IdempotencyEntry>>,
     /// Pending one-time launches and the launch concurrency counter.
     pub launch_store: LaunchStore,
+    pub detached: crate::detached::DetachedStore,
     /// Registered terminals for cooperative existing-terminal launches.
     pub terminals: TerminalRegistry,
     /// Help-probe previews and results.
@@ -77,6 +78,7 @@ impl Registry {
             login_attempts: Mutex::new(Vec::new()),
             idempotency: Mutex::new(HashMap::new()),
             launch_store: LaunchStore::new(),
+            detached: crate::detached::DetachedStore::default(),
             terminals: TerminalRegistry::new(),
             probe_store: ProbeStore::new(),
         }

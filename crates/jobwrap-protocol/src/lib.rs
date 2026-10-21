@@ -16,8 +16,8 @@ pub use codec::{decode_frame, encode_frame, FrameDecoder, PROTOCOL_HEADER_BYTES}
 pub use error::ProtocolError;
 pub use message::{
     decode_input, error_response, input_message, wrapper_input, ClientToDaemon, DaemonToClient,
-    Hello, HelloRole, LaunchRequest, RegisterJob, RegisterResult, RegisterTerminal, ToWrapper,
-    TokenCreateRequest, WrapperToDaemon, PROTOCOL_VERSION,
+    DetachedRequest, Hello, HelloRole, LaunchRequest, RegisterJob, RegisterResult,
+    RegisterTerminal, ToWrapper, TokenCreateRequest, WrapperToDaemon, PROTOCOL_VERSION,
 };
 pub use types::{
     ApiErrorCode, DaemonError, HelpProbeKind, HelpProbeRequest, HelpProbeResult, JobSummary,

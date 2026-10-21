@@ -274,14 +274,15 @@ fn child_exec(
     // Build a merged environment.
     let mut env_ptrs: Vec<*const libc::c_char> = Vec::new();
     let mut env_owned: Vec<CString> = Vec::new();
-    // Copy the current environment.
-    for (k, v) in std::env::vars() {
-        if let Ok(c) = CString::new(format!("{k}={v}")) {
-            env_owned.push(c);
-        }
-    }
-    for (k, v) in envs {
-        if let Ok(c) = CString::new(format!("{}={}", k.to_string_lossy(), v.to_string_lossy())) {
+    // Linux environment values may contain non-UTF-8 bytes. Preserve them,
+    // and replace inherited keys rather than emitting duplicate env entries.
+    let environment: std::collections::BTreeMap<_, _> =
+        std::env::vars_os().chain(envs.iter().cloned()).collect();
+    for (k, v) in environment {
+        let mut entry = k.as_bytes().to_vec();
+        entry.push(b'=');
+        entry.extend_from_slice(v.as_bytes());
+        if let Ok(c) = CString::new(entry) {
             env_owned.push(c);
         }
     }

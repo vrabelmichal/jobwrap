@@ -32,6 +32,10 @@ pub fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Token { action } => token(action),
         Command::Launch(args) => launch(args),
         Command::AttachLaunch { launch_id } => attach_launch(&launch_id),
+        Command::DetachedWorker { job_id } => {
+            let code = crate::detached::worker(parse_job_id(&job_id)?)?;
+            std::process::exit(code);
+        }
         Command::Inspect { target } => inspect(&target),
         Command::Terminals => terminals(),
     }
@@ -71,6 +75,8 @@ fn tag(msg: &DaemonToClient) -> &'static str {
         DaemonToClient::Registered { .. } => "registered",
         DaemonToClient::JobList { .. } => "job_list",
         DaemonToClient::JobDetail { .. } => "job_detail",
+        DaemonToClient::DetachedStarted { .. } => "detached_started",
+        DaemonToClient::DetachedLaunch { .. } => "detached_launch",
         DaemonToClient::Output { .. } => "output",
         DaemonToClient::Ack => "ack",
         DaemonToClient::Error { .. } => "error",
@@ -119,7 +125,7 @@ fn show(job: &str) -> anyhow::Result<()> {
             DaemonToClient::JobDetail { job: Some(job) } => {
                 println!("job id:             {}", job.id);
                 println!("name:               {}", job.display_name);
-                println!("state:              {}", job.state);
+                println!("state:              {}", job.state.describe());
                 println!("profile:            {}", job.profile_name);
                 println!("started:            {}", job.started_at.to_rfc3339());
                 if let Some(finished) = job.finished_at {
@@ -778,7 +784,7 @@ password_attempt_limit = 5
 password_attempt_window_seconds = 60
 
 # Daemon/API process creation is experimental and disabled by default. Normal
-# `jobwrap COMMAND` wrapping is unaffected.
+# Local `jobwrap run -- COMMAND` (including --detach) is unaffected.
 [launch]
 enabled = false
 default_profile = "standard"

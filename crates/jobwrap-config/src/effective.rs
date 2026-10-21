@@ -185,7 +185,7 @@ impl EffectiveConfig {
             },
             launch: LaunchConfig {
                 // Remote/daemon-side process creation is an opt-in feature.
-                // The ordinary `jobwrap COMMAND` path remains available.
+                // The ordinary `jobwrap run -- COMMAND` path remains available.
                 enabled: false,
                 default_profile: "standard".to_string(),
                 default_terminal_mode: "new-terminal".to_string(),

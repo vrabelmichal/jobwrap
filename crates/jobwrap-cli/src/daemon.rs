@@ -163,6 +163,8 @@ fn protocol_tag(msg: &DaemonToClient) -> &'static str {
         DaemonToClient::Registered { .. } => "registered",
         DaemonToClient::JobList { .. } => "job_list",
         DaemonToClient::JobDetail { .. } => "job_detail",
+        DaemonToClient::DetachedStarted { .. } => "detached_started",
+        DaemonToClient::DetachedLaunch { .. } => "detached_launch",
         DaemonToClient::Output { .. } => "output",
         DaemonToClient::Ack => "ack",
         DaemonToClient::Error { .. } => "error",

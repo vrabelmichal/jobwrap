@@ -114,7 +114,7 @@ pub fn execute(
     let job_id = JobId::generate().map_err(|e| e.to_string())?;
     match req.terminal_target {
         TerminalTarget::Managed => Err(
-            "managed daemon launches are disabled: lifecycle supervision and PTY capture are not yet safe; use `jobwrap COMMAND`"
+            "managed API launches are disabled; use local `jobwrap run -- COMMAND` or `jobwrap run --detach -- COMMAND`"
                 .into(),
         ),
         TerminalTarget::NewTerminal { ref backend } => {

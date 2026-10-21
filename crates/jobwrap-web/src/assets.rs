@@ -272,7 +272,7 @@ pub fn new_job_page(capabilities: &LaunchCapabilities, authenticated: bool) -> S
         format!(
             "<div class=\"notice\"><h2>Process creation is disabled</h2>\
 <p>Daemon-side process creation is an opt-in feature. The ordinary \
-<code>jobwrap COMMAND</code> path always works. To start jobs from this web \
+<code>jobwrap run -- COMMAND</code> path always works. To start jobs from this web \
 interface (and the API), add the following to your configuration and restart \
 the daemon:</p><pre><code>{}</code></pre>\
 <p class=\"muted\">With <code>require_preview = false</code> only the \

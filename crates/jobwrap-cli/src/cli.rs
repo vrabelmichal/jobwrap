@@ -5,37 +5,16 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-/// The subcommand names that take priority over wrapper mode.
-pub const RESERVED_SUBCOMMANDS: &[&str] = &[
-    "wrap",
-    "list",
-    "show",
-    "logs",
-    "attach",
-    "signal",
-    "stop",
-    "open",
-    "daemon",
-    "config",
-    "auth",
-    "token",
-    "launch",
-    "attach-launch",
-    "inspect",
-    "terminals",
-    "version",
-    "help",
-];
-
 #[derive(Debug, Parser)]
 #[command(
     name = "jobwrap",
     version = jobwrap_core::build_info::VERSION,
     long_version = jobwrap_core::build_info::LONG_VERSION,
     about = "Wrap a locally launched Linux process and securely expose monitoring and narrowly authorized control.",
-    after_help = "If the first word is not a jobwrap subcommand it is treated as the\n\
-                  command to run, so `jobwrap python3 analysis.py` works directly.\n\
-                  Use `jobwrap -- COMMAND` to make that explicit."
+    after_help = "Start jobs explicitly with `jobwrap run [OPTIONS] -- COMMAND [ARGS...]`.\n\
+                  Bare executable names and unknown subcommands are rejected.\n\
+                  Inspect a job with `jobwrap show JOB_ID` (alias: `status`).\n\
+                  Start a persistent server with `jobwrap run -d -- COMMAND`."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -44,11 +23,13 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Run a command under jobwrap (default when no subcommand matches).
+    /// Run a command under jobwrap.
+    #[command(name = "run")]
     Wrap(WrapArgs),
     /// List registered jobs.
     List,
-    /// Show detailed information about one job.
+    /// Show detailed information about one job (alias: status).
+    #[command(alias = "status")]
     Show { job: String },
     /// Print (a portion of) a job's recorded output.
     Logs {
@@ -89,6 +70,9 @@ pub enum Command {
     /// Attach the one-time launch helper (used by the daemon's terminal
     /// backends; not for interactive use).
     AttachLaunch { launch_id: String },
+    /// Internal worker started by the user service manager.
+    #[command(hide = true)]
+    DetachedWorker { job_id: String },
     /// Inspect a target's static metadata and man pages.
     Inspect { target: String },
     /// List registered terminals.
@@ -190,8 +174,8 @@ pub struct WrapArgs {
     /// The access profile to use.
     #[arg(long)]
     pub profile: Option<String>,
-    /// Detach from the terminal and run in the background.
-    #[arg(long)]
+    /// Run independently in a systemd user service; return the registered job ID.
+    #[arg(long, short = 'd', conflicts_with = "no_web")]
     pub detach: bool,
     /// Do not start or use the web server.
     #[arg(long)]
@@ -218,4 +202,36 @@ impl WrapArgs {
 #[allow(dead_code)]
 pub fn executable_path(executable: &OsString) -> PathBuf {
     PathBuf::from(executable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn executable_names_and_typos_are_not_implicit_launches() {
+        for word in ["python3", "statsu", "wrap", "/bin/true", "--", "-R"] {
+            assert!(Cli::try_parse_from(["jobwrap", word]).is_err(), "{word}");
+        }
+    }
+
+    #[test]
+    fn explicit_launch_accepts_subcommand_names_as_executables() {
+        let cli = Cli::try_parse_from(["jobwrap", "run", "-d", "--", "status", "literal arg"])
+            .expect("explicit run");
+        let Command::Wrap(args) = cli.command else {
+            panic!("expected run")
+        };
+        assert!(args.detach);
+        assert_eq!(
+            args.command,
+            [OsString::from("status"), OsString::from("literal arg")]
+        );
+    }
+
+    #[test]
+    fn status_is_a_read_only_show_alias() {
+        let cli = Cli::try_parse_from(["jobwrap", "status", "job-id"]).expect("status");
+        assert!(matches!(cli.command, Command::Show { job } if job == "job-id"));
+    }
 }

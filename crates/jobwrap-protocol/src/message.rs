@@ -48,6 +48,12 @@ pub enum ClientToDaemon {
         job_id: JobId,
         sequence_start: u64,
     },
+    /// Local-owner-only launch; never accepted through the HTTP launch API.
+    DetachJob(DetachedRequest),
+    /// One-time retrieval by the service-manager-started wrapper.
+    ClaimDetached {
+        job_id: JobId,
+    },
 
     // Control.
     SendInput {
@@ -130,6 +136,29 @@ pub struct TokenCreateRequest {
     pub scopes: Vec<String>,
     pub job_id: Option<JobId>,
     pub expires_at: Option<String>,
+}
+
+/// Caller context for a detached local job. Native strings are byte arrays so
+/// non-UTF-8 Linux paths, arguments, and environment values survive unchanged.
+/// Environment values stay in memory and are never written to job metadata.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachedRequest {
+    pub command: Vec<Vec<u8>>,
+    pub working_directory: Vec<u8>,
+    pub environment: Vec<(Vec<u8>, Vec<u8>)>,
+    pub name: String,
+    pub profile: String,
+    pub record_output: bool,
+}
+
+impl std::fmt::Debug for DetachedRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DetachedRequest")
+            .field("name", &self.name)
+            .field("profile", &self.profile)
+            .field("record_output", &self.record_output)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A launch request from the API or web interface.
@@ -222,6 +251,13 @@ pub enum DaemonToClient {
     },
     JobDetail {
         job: Option<JobSummary>,
+    },
+    DetachedStarted {
+        job_id: JobId,
+    },
+    DetachedLaunch {
+        job_id: JobId,
+        request: DetachedRequest,
     },
     Output {
         slice: super::OutputSlice,

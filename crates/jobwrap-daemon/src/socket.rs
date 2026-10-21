@@ -239,7 +239,15 @@ async fn handle_cli(
         let Some(request) = read_request(&mut stream).await else {
             break;
         };
-        let response = handle_cli_message(&registry, &owner, request);
+        let response = match request {
+            ClientToDaemon::DetachJob(request) => {
+                match crate::detached::launch(registry.clone(), &owner, request).await {
+                    Ok(job_id) => DaemonToClient::DetachedStarted { job_id },
+                    Err(error) => error_response("detached_launch_failed", error),
+                }
+            }
+            other => handle_cli_message(&registry, &owner, other),
+        };
         write_response(&mut stream, &response).await?;
     }
     Ok(())
@@ -254,6 +262,16 @@ fn handle_cli_message(
     let err = |code: Code, msg: &str| error_response(code.as_str(), msg);
 
     match request {
+        ClientToDaemon::DetachJob(_) => {
+            err(Code::BadRequest, "detached launch requires async handling")
+        }
+        ClientToDaemon::ClaimDetached { job_id } => match registry.detached.take(job_id) {
+            Some(request) => DaemonToClient::DetachedLaunch { job_id, request },
+            None => err(
+                Code::NotFound,
+                "detached request expired or was already claimed",
+            ),
+        },
         ClientToDaemon::Hello(_) => err(Code::BadRequest, "unexpected hello"),
         ClientToDaemon::ListJobs => {
             let jobs = registry.list_jobs(owner);
