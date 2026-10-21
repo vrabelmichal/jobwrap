@@ -99,9 +99,16 @@ document.
 
 ### Process safety
 
-* daemon/API process creation is disabled by default;
-* managed and existing-terminal daemon launches fail closed; only the opt-in
+* HTTP/API process creation is disabled by default;
+* managed and existing-terminal HTTP launches fail closed; only the opt-in
   new-terminal helper path is implemented;
+* local `run --detach` is a separate owner-only Unix-socket operation, available
+  without enabling HTTP launch. Peer credentials establish the local owner,
+  and global launch authorization is checked before starting a transient user
+  service. The worker claims a bounded, expiring request once;
+* detached environment values travel over the private socket and remain in
+  memory until claimed. They are omitted from unit arguments, stored job
+  metadata, and debug rendering. Child output can still reveal its own secrets;
 * wrapped commands are executed directly
   (`Command::new(executable).args(arguments)`), never via an implicit shell;
 * no arbitrary numeric signals are exposed — only named allow-listed signals;

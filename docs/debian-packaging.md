@@ -83,6 +83,12 @@ Installed files:
 No global writable state directory is installed. All runtime and persistent
 state belongs to individual users under their XDG directories.
 
+`run --detach` additionally needs `systemd-run` and a functioning systemd user
+manager (Debian packages `systemd` and `dbus-user-session`). These are optional
+suggestions because foreground wrapping does not require systemd. Each detached
+job uses its own transient user service; enabling `jobwrapd.service` is not
+required. The package does not change login-lingering or logout policy.
+
 ## Manpages and tab completion
 
 All three manpages are installed in the standard man directories; use

@@ -36,7 +36,7 @@ copyright = "2026, jobwrap contributors"
 license-file = ["../../LICENSE", "0"]
 section = "utils"
 priority = "optional"
-suggests = "bash-completion, jobwrap-codex-skills"
+suggests = "bash-completion, jobwrap-codex-skills, systemd, dbus-user-session"
 assets = [
   ["target/release/jobwrap", "usr/bin/jobwrap", "755"],
   ["target/release/jobwrapd", "usr/libexec/jobwrap/jobwrapd", "755"],

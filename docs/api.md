@@ -95,11 +95,18 @@ Terminal data is bytes, not UTF-8; it is always transported as base64.
 
 ## CLI over the Unix socket
 
+`jobwrap run -- COMMAND` starts a foreground job. Use
+`jobwrap run -d -- COMMAND` for a detached local job; this owner-only socket
+operation does not enable or use the experimental HTTP launch API. It requires
+a working systemd user manager. The CLI returns after job registration, and
+`show`/`status` report the eventual exit code or termination signal.
+
 The same operations are available to the local user through `jobwrap`:
 
 ```text
 jobwrap list
 jobwrap show JOB_ID
+jobwrap status JOB_ID
 jobwrap logs JOB_ID
 jobwrap signal JOB_ID INT
 jobwrap stop JOB_ID

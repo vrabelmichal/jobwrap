@@ -4,7 +4,6 @@ All notable changes to jobwrap are documented in this file.
 
 ## [Unreleased]
 
-
 ### Added
 
 - Browser tab titles and page headers identify the machine serving the jobwrap
@@ -87,6 +86,44 @@ All notable changes to jobwrap are documented in this file.
   terminal-output, and signal-control sections. The browser's live-output
   connection is labeled separately from the job state instead of appearing as
   an unexplained `disconnected` status.
+
+## [0.2.0] - 2026-10-21
+
+### Added
+
+- `jobwrap run --detach` (`-d`) starts an independent transient systemd user
+  service and returns its registered job ID, URL, and unit name. Servers and
+  tasks survive their launching terminal or agent's process/cgroup cleanup.
+  Detached mode requires `systemd-run` and a working user manager and reports
+  an error when they are unavailable.
+- Detached workers preserve native Linux argv, environment, and cwd bytes,
+  reuse the existing PTY/output/control paths, and keep workload environment
+  values out of unit arguments, persisted job metadata, and debug rendering.
+  Startup claims are bounded, expiring, and consumed once. Registration failure
+  terminates and reaps the detached child.
+- `jobwrap status JOB_ID` is a read-only alias for `show`. Detailed CLI status
+  includes final exit codes and termination signals.
+- Lifecycle documentation and agent skills explain detached launches, readiness
+  checks, user-service inspection, and the current lack of wrapper reconnection
+  after daemon restart. Detached services survive that restart, but monitoring
+  records become disconnected.
+
+### Changed
+
+- **Breaking CLI change:** commands start only through `jobwrap run [OPTIONS]
+  -- COMMAND [ARGS...]`. Bare `jobwrap COMMAND`, `jobwrap -- COMMAND`, and the
+  former `wrap` subcommand are rejected before creating a job. This prevents
+  mistyped queries from accidentally launching workloads. No executable alias
+  named `wrap` or `jwrap` is installed. Help, docs, skills, and all completions
+  use the explicit interface.
+- Debian metadata suggests systemd and dbus-user-session for optional detached
+  launches. The local owner-only detached operation does not enable the
+  experimental HTTP launch API.
+
+### Fixed
+
+- Preserve non-UTF-8 environment values in PTY execution instead of panicking
+  during UTF-8 conversion, and replace inherited environment keys correctly.
 
 ## [0.1.3] - 2026-10-08
 

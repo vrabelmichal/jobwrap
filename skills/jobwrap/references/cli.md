@@ -12,24 +12,27 @@ jobwrap daemon status
 jobwrap daemon start
 
 # Illustrative commands: substitute the user's actual executable and arguments.
-jobwrap wrap --name large-upload --profile private -- \
+jobwrap run --detach --name large-upload --profile private -- \
   rclone copy ./dataset remote:dataset --progress
-jobwrap wrap --name long-calculation --profile private -- \
+jobwrap run --name long-calculation --profile private -- \
   python3 analysis.py --config analysis.yaml
 ```
 
 Run the wrapper in the desired working directory. It inherits the launch
-environment. The launch blocks until the child finishes and returns the child's
-exit code. Keep that execution session alive; a tool timeout may terminate the
-wrapper or its child.
+environment. Foreground `run` blocks until the child finishes and returns its
+exit code. Keep that session alive; a tool timeout may terminate the wrapper
+or child. Use `--detach` for jobs that must survive the launching agent.
 
-`jobwrap python3 analysis.py` is shorthand. Use the explicit `wrap ... --`
-form to separate wrapper flags from child flags and avoid clashes with reserved
-subcommands such as `list`, `show`, or `stop`.
+Version 0.2 requires the explicit `run` subcommand. Bare `jobwrap python3 ...`,
+`jobwrap -- COMMAND`, and `jobwrap wrap ...` are rejected before execution.
+Place run options before `--` and the executable after it. For example,
+`jobwrap run -- status ARG` runs an executable named `status`, whereas
+`jobwrap status JOB_ID` is a read-only alias for `show`.
 
-The banner prints `registered job JOB_ID` and its web URL. Save that ID; do not
-identify a job by a nonunique name or stale PID. If registration fails, the child
-can still be running attached to the terminal without monitoring.
+The banner prints `registered job JOB_ID` (or `registered detached job JOB_ID`)
+and its web URL. Save that ID; do not identify a job by a nonunique name or stale
+PID. Foreground registration failure can leave the child running without
+monitoring; detached registration failure terminates and reaps its child.
 
 Wrapper options:
 
@@ -39,13 +42,43 @@ Wrapper options:
 | `--profile PROFILE` | Select configured access profile |
 | `--no-record` | Disable recorded terminal output |
 | `--no-web` | Skip daemon registration; no API/web monitoring for this job |
-| `--detach` | Not implemented; rejects the request before starting a child |
+| `--detach` / `-d` | Run in an independent systemd user service and return after registration |
+
+## Detached servers and tasks
+
+```sh
+jobwrap run -d --name report-server --profile private -- \
+  python3 -m http.server 18881 --bind 127.0.0.1 --directory ./report
+```
+
+Detached mode requires `systemd-run` and a working systemd user manager. The
+local owner CLI sends its context to the daemon, which starts a separate user
+service outside the agent's process tree and cgroup. It does not require
+`[launch] enabled = true` or open the HTTP launch API. The worker preserves
+native argv, cwd, and environment bytes; environment values travel only over
+the private socket and are not placed in unit arguments or job metadata.
+
+The CLI returns zero after registration. It does not wait for completion or
+guarantee that a server is ready. Check `show`/`status`, output, and workload
+readiness. On an ambiguous startup timeout, inspect the reported job ID and unit
+before retrying. `--no-record` works; `--no-web` conflicts with `--detach`.
+
+Save the printed `jobwrap-job-JOB_ID.service` name. Services survive daemon
+shutdown, but the current protocol cannot reconnect/adopt wrappers: their
+records become `disconnected`, and daemon recording/control stop. Inspect with
+`systemctl --user status jobwrap-job-JOB_ID.service` or
+`journalctl --user -u jobwrap-job-JOB_ID.service`; when termination is authorized,
+use `systemctl --user stop jobwrap-job-JOB_ID.service` for a disconnected job.
+User-manager shutdown, logout policies, reboot, or explicit stops can still
+terminate services. No login-lingering, boot persistence, or automatic restart
+is configured. Keep files needed by the workload available independently.
 
 ## Monitor and control
 
 ```sh
 jobwrap list
 jobwrap show JOB_ID
+jobwrap status JOB_ID               # read-only alias for show
 jobwrap logs JOB_ID
 jobwrap logs JOB_ID --offset 1048576
 jobwrap open JOB_ID
@@ -58,7 +91,8 @@ jobwrap signal JOB_ID cont          # SIGCONT, resume
 jobwrap signal JOB_ID kill          # SIGKILL, forced termination
 ```
 
-`list` and `show` produce human-readable output, not JSON. Prefer HTTP for
+`list`, `show`, and `status` produce human-readable output, not JSON. Detailed
+status includes the final exit code or termination signal. Prefer HTTP for
 machine-readable monitoring. `logs` fetches one bounded slice (up to 1 MiB);
 `--offset` is a byte offset. It is not a follow command. Output contains terminal
 bytes and may include ANSI escapes, carriage returns, and non-UTF-8 data.

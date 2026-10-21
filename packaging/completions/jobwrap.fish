@@ -1,5 +1,5 @@
 # fish completion for jobwrap
-complete -c jobwrap -f -n '__fish_use_subcommand' -a wrap -d 'Run a command under jobwrap'
+complete -c jobwrap -f -n '__fish_use_subcommand' -a run -d 'Run a command under jobwrap'
 complete -c jobwrap -f -n '__fish_use_subcommand' -a attach -d 'Attach to a job (experimental)'
 complete -c jobwrap -f -n '__fish_use_subcommand' -a launch -d 'Launch a managed process (experimental)'
 complete -c jobwrap -f -n '__fish_use_subcommand' -a attach-launch -d 'Attach a launch helper'
@@ -8,6 +8,7 @@ complete -c jobwrap -f -n '__fish_use_subcommand' -a terminals -d 'List register
 complete -c jobwrap -f -n '__fish_use_subcommand' -a help -d 'Show help'
 complete -c jobwrap -f -n '__fish_use_subcommand' -a list -d 'List registered jobs'
 complete -c jobwrap -f -n '__fish_use_subcommand' -a show -d 'Show job details'
+complete -c jobwrap -f -n '__fish_use_subcommand' -a status -d 'Show job details (alias for show)'
 complete -c jobwrap -f -n '__fish_use_subcommand' -a logs -d 'Print a job output log'
 complete -c jobwrap -f -n '__fish_use_subcommand' -a signal -d 'Send a named signal'
 complete -c jobwrap -f -n '__fish_use_subcommand' -a stop -d 'Send SIGTERM'
@@ -17,11 +18,11 @@ complete -c jobwrap -f -n '__fish_use_subcommand' -a config -d 'Manage configura
 complete -c jobwrap -f -n '__fish_use_subcommand' -a auth -d 'Manage password authentication'
 complete -c jobwrap -f -n '__fish_use_subcommand' -a token -d 'Manage API tokens'
 
-complete -c jobwrap -s n -l name -d 'Job name'
-complete -c jobwrap -l profile -d 'Access profile'
-complete -c jobwrap -l detach -d 'Detach from the terminal'
-complete -c jobwrap -l no-web -d 'Do not use the web server'
-complete -c jobwrap -l no-record -d 'Do not record output'
+complete -c jobwrap -n '__fish_seen_subcommand_from run' -s n -l name -r -d 'Job name'
+complete -c jobwrap -n '__fish_seen_subcommand_from run' -l profile -r -d 'Access profile'
+complete -c jobwrap -n '__fish_seen_subcommand_from run' -s d -l detach -d 'Run in an independent user service'
+complete -c jobwrap -n '__fish_seen_subcommand_from run' -l no-web -d 'Do not use the web server'
+complete -c jobwrap -n '__fish_seen_subcommand_from run' -l no-record -d 'Do not record output'
 
 complete -c jobwrap -n '__fish_seen_subcommand_from signal; and test (count (commandline -opc)) -eq 3' -a 'int term hup quit stop cont kill'
 complete -c jobwrap -n '__fish_seen_subcommand_from daemon; and test (count (commandline -opc)) -eq 2' -a 'status start stop restart'

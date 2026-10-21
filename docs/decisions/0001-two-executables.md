@@ -4,7 +4,8 @@ Date: 2026-08-01
 
 ## Status
 
-Accepted
+Accepted; process-creation scope amended by
+[ADR-0003](0003-explicit-detached-launches.md).
 
 ## Context
 

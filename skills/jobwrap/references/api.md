@@ -130,7 +130,11 @@ failure calls for the appropriate existing authority, not disabling protections.
 
 ## Experimental launch and inspection
 
-Prefer local `jobwrap wrap` for starting workloads. `POST /api/v1/launch` is
+Prefer local `jobwrap run -- COMMAND` for foreground workloads and
+`jobwrap run -d -- COMMAND` for servers/tasks that must outlive the agent.
+Detached mode is a local-owner Unix-socket operation requiring a systemd user
+manager; it does not enable HTTP process creation. `show` (alias `status`) and
+the normal read endpoints monitor its registered job. `POST /api/v1/launch` is
 disabled by default. Even when `[launch] enabled = true`, the default
 `require_preview = true` fails closed because launch previews are not implemented.
 Only an owner-explicitly configured `require_preview = false` allows the

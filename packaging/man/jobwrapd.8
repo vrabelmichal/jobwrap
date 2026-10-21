@@ -1,4 +1,4 @@
-.TH JOBWRAPD 8 "August 2026" "jobwrap 0.1" "System Administration"
+.TH JOBWRAPD 8 "October 2026" "jobwrap 0.2.0" "System Administration"
 .SH NAME
 jobwrapd \- the per-user jobwrap daemon
 .SH SYNOPSIS
@@ -7,8 +7,9 @@ jobwrapd \- the per-user jobwrap daemon
 .SH DESCRIPTION
 \fBjobwrapd\fR is the per-user daemon that provides the web interface, HTTP
 API, authentication, job registry, log storage, and access control for
-jobwrap. It runs as the invoking user, never as root. Experimental daemon/API
-launch and help-probe features are disabled by default.
+jobwrap. It runs as the invoking user, never as root. Experimental HTTP API
+launch and help-probe features are disabled by default. Local detached jobs use
+a separate owner-only socket request and transient systemd user services.
 .PP
 It is normally started automatically by \fBjobwrap\fR, or through the user
 systemd units. It binds an HTTP listener to loopback and listens on a private

@@ -8,7 +8,7 @@ normal foreground command, while a per-user daemon provides a web interface,
 HTTP API, and scoped control.
 
 ```text
-jobwrap python3 run_analysis.py --config analysis.yaml
+jobwrap run -- python3 run_analysis.py --config analysis.yaml
 ```
 
 The wrapper prints registration information, then the process runs as usual —
@@ -29,7 +29,7 @@ Or skip that step entirely: `jobwrap` starts the daemon automatically the
 first time it needs one. Just run a command:
 
 ```sh
-jobwrap top                  # any command; colors and Ctrl+C work
+jobwrap run -- top           # foreground; colors and Ctrl+C work
 ```
 
 In another terminal:
@@ -37,6 +37,7 @@ In another terminal:
 ```sh
 jobwrap list                 # list jobs
 jobwrap show <JOB_ID>        # details
+jobwrap status <JOB_ID>      # alias for show; never starts a job
 jobwrap signal <JOB_ID> int  # send SIGINT
 jobwrap daemon restart       # apply a config change
 jobwrap daemon stop          # stop the daemon
@@ -49,6 +50,44 @@ is enabled in the configuration (it is off by default; see
 `jobwrap daemon start --foreground` to keep the daemon attached to the
 terminal instead of the background.
 
+## Detached servers and agent tasks
+
+Use detached mode when the job must outlive its launching terminal or AI agent:
+
+```sh
+jobwrap run --detach --name report-server --profile private -- \
+  python3 -m http.server 8080 --bind 127.0.0.1
+# --detach can also be written -d.
+```
+
+The CLI returns the registered job ID and URL. The wrapper runs in its own
+systemd user service, outside the launcher's process tree and cgroup, so agent
+process cleanup does not terminate it. Detached mode requires `systemd-run`
+and a working systemd user manager; an unavailable manager produces an error.
+It preserves the caller's executable, arguments, environment, and working
+directory. Logs, web output, input, and signals still use the daemon.
+
+Check `jobwrap show JOB_ID` and the server's readiness endpoint before reporting
+that it is ready. A successful detached launch confirms registration, not
+application readiness or eventual success. Use `jobwrap stop JOB_ID` to request
+termination, then check its final state.
+
+Detached services survive a jobwrap daemon restart, but wrapper reconnection
+is not implemented: those records become `disconnected`, and recording/control
+through the restarted daemon are unavailable. Inspect the service with
+`systemctl --user status jobwrap-job-JOB_ID.service`; use
+`systemctl --user stop jobwrap-job-JOB_ID.service` to stop it if necessary.
+User-manager shutdown, logout policies, reboot, or an explicit service stop can
+still terminate it. Detached mode is not automatic restart or boot persistence.
+
+## Explicit launch syntax in 0.2
+
+Launch commands use `jobwrap run [OPTIONS] -- COMMAND [ARGS...]`. The old bare
+`jobwrap COMMAND`, `jobwrap -- COMMAND`, and `jobwrap wrap` forms are rejected.
+Unknown subcommands and typos fail before creating a job. There is no `wrap`
+or `jwrap` executable alias. For example, running an executable named `status`
+requires `jobwrap run -- status`; `jobwrap status JOB_ID` inspects a job.
+
 ## Version and build information
 
 `jobwrap --version` and `jobwrapd --version` report the application version,
@@ -59,8 +98,8 @@ starts its tab title with the hostname and shows the hostname in the header,
 alongside its build information footer. Builds from source archives without
 Git metadata report the commit as `unknown`.
 
-The workspace version is the source of truth: application `0.1.3` is released
-as GitHub tag `v0.1.3` and Debian packages `0.1.3-1`, where `-1` is the Debian
+The workspace version is the source of truth: application `0.2.0` is released
+as GitHub tag `v0.2.0` and Debian packages `0.2.0-1`, where `-1` is the Debian
 packaging revision.
 
 ## Layout
@@ -83,13 +122,14 @@ docs/                    architecture, security model, API, configuration
 See `docs/security-model.md`. Highlights:
 
 * the HTTP server binds to loopback by default;
-* daemon/API process creation and executable help probes are disabled by default;
+* HTTP API process creation and executable help probes are disabled by default;
 * wrapped commands are never run through an implicit shell;
 * only named signals are exposed;
 * passwords and tokens are stored hashed;
 * log growth, protocol frames, WebSockets, and daemon socket connections are bounded.
 
-The supported process path is `jobwrap COMMAND`. The experimental `jobwrap
+The supported process path is `jobwrap run -- COMMAND`, with `-d` for detached
+jobs through the owner-only local socket. The experimental `jobwrap
 launch` API is opt-in; managed and existing-terminal modes deliberately fail
 closed until their lifecycle/control integrations are complete. See
 `docs/security-model.md` and `AUDIT_REPORT.md`.

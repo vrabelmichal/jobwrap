@@ -1,4 +1,4 @@
-.TH JOBWRAP.TOML 5 "August 2026" "jobwrap 0.1" "File Formats"
+.TH JOBWRAP.TOML 5 "October 2026" "jobwrap 0.2.0" "File Formats"
 .SH NAME
 jobwrap.toml \- jobwrap configuration file
 .SH DESCRIPTION
@@ -24,8 +24,9 @@ The jobwrap configuration lives at \fI~/.config/jobwrap/config.toml\fR.
 \fBpassword_attempt_limit\fR, \fBpassword_attempt_window_seconds\fR.
 .TP
 .B [launch]
-Daemon/API launches are disabled by default. The safe supported path remains
-\fBjobwrap COMMAND\fR. Managed and existing-terminal API launch modes are not
+HTTP API launches are disabled by default. Local \fBjobwrap run -- COMMAND\fR,
+including \fB--detach\fR, does not require enabling HTTP launches.
+Managed and existing-terminal API launch modes are not
 available in this release.
 .TP
 .B [help]

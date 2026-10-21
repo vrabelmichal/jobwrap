@@ -169,6 +169,18 @@ _jobwrap
 COMP_WORDS=(jobwrap daemon start --f); COMP_CWORD=3
 _jobwrap
 [[ "${COMPREPLY[*]}" == --foreground ]]
+COMP_WORDS=(jobwrap ru); COMP_CWORD=1
+_jobwrap
+[[ "${COMPREPLY[*]}" == run ]]
+COMP_WORDS=(jobwrap wr); COMP_CWORD=1
+_jobwrap
+[[ ${#COMPREPLY[@]} == 0 ]]
+COMP_WORDS=(jobwrap status ''); COMP_CWORD=2
+_jobwrap
+[[ ${#COMPREPLY[@]} == 0 ]]
+COMP_WORDS=(jobwrap run -d); COMP_CWORD=2
+_jobwrap
+[[ "${COMPREPLY[*]}" == -d ]]
 '''
     subprocess.check_call(["bash", "-c", script], cwd=root)
     print("Package contents, dependencies, ownership, conffiles and Bash completion checks passed.")

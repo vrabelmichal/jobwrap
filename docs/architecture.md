@@ -8,7 +8,7 @@ secure monitoring and narrowly authorized control through a per-user daemon.
 ```text
 GNOME Terminal / shell
    |
-   +-- jobwrap COMMAND ARGS          (/usr/bin/jobwrap)
+   +-- jobwrap run -- COMMAND ARGS   (/usr/bin/jobwrap)
         |
         +-- PTY relay  <---> child process group (command + descendants)
         |
@@ -29,19 +29,19 @@ The system is two cooperating executables:
 
 * **`jobwrap`** — the command users type. It parses arguments, allocates a PTY,
   forks the command into its own session and process group, registers the job
-  with the daemon, and relays terminal traffic. It is the only component that
-  ever creates processes.
+  with the daemon, and relays terminal traffic. In detached mode a new copy
+  runs as a separate systemd user service rather than as an agent descendant.
 * **`jobwrapd`** — a per-user daemon providing the web interface, HTTP API,
   authentication, job registry, log storage, and access control. Experimental
-  launch/probe features are disabled by default; the only opt-in launch mode
-  currently available starts the fixed `jobwrap attach-launch` helper in a
-  supported terminal emulator.
+  HTTP launch/probe features are disabled by default. The separate local-owner
+  detached-launch path starts a fixed worker through the user service manager.
+  The opt-in HTTP launch mode starts `jobwrap attach-launch` in a terminal.
 
 ## Process model
 
 When invoked, `jobwrap`:
 
-1. parses only its own arguments (before `--` or an unrecognized first word);
+1. requires the `run` subcommand and parses its options before the executable;
 2. loads the user configuration;
 3. determines the effective profile;
 4. allocates a new pseudo-terminal;
@@ -59,6 +59,25 @@ When invoked, `jobwrap`:
 
 The child is a session leader with its own process group so that control
 actions target the whole group, not just the immediate child.
+
+With `jobwrap run -d`, the CLI sends its native command, environment, and cwd
+over the owner-only socket. The daemon validates the request, assigns a job ID,
+and starts `jobwrap detached-worker JOB_ID` in `jobwrap-job-JOB_ID.service`
+through `systemd-run --user`. A one-time memory-only claim transfers the caller
+context to that worker. Pending claims are bounded and expire. Environment
+values are not passed in the unit command line or persisted in job metadata.
+
+The worker resolves its daemon paths before restoring the caller environment,
+then creates the normal PTY and registers the assigned ID. The launch command
+returns only after registration is observed. On registration failure the worker
+terminates and reaps its child; it does not leave an unmonitored detached job.
+The service manager owns and reaps the worker. The original agent's process or
+cgroup teardown cannot kill that independent service. No double-fork or
+foreground fallback is used when the user manager is unavailable.
+
+The worker and workload survive daemon shutdown, but the existing socket
+protocol does not reconnect/adopt them. A restarted daemon reports those records
+as disconnected; use the named user service to inspect or stop the workload.
 
 ## Process identities
 
@@ -113,7 +132,9 @@ started directly with `jobwrap daemon start` (background) or
 `jobwrap daemon start --foreground` (attached to the terminal), and
 restarted with `jobwrap daemon restart` to pick up configuration changes.
 When auto-start fails, the daemon's captured output is included in the
-error. A systemd user unit is provided but not required.
+error. A systemd user unit for the daemon is provided but not required.
+Detached jobs require a working user service manager even if the daemon was
+started directly; each detached job gets its own independent transient unit.
 
 ## Crates
 
@@ -144,5 +165,7 @@ implemented.
 ## Protocol
 
 Frames are 4-byte big-endian length prefixes followed by JSON. Binary payloads
-are base64 strings. All messages are typed enums; there are no untyped
+are base64 strings for terminal I/O. Detached native command/environment strings
+use byte arrays so Linux non-UTF-8 values are preserved. All messages are typed
+enums; there are no untyped
 dictionaries in the protocol.

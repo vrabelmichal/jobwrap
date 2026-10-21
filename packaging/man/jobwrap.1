@@ -1,9 +1,9 @@
-.TH JOBWRAP 1 "August 2026" "jobwrap 0.1" "User Commands"
+.TH JOBWRAP 1 "October 2026" "jobwrap 0.2.0" "User Commands"
 .SH NAME
 jobwrap \- wrap a locally launched Linux process with monitoring and control
 .SH SYNOPSIS
 .B jobwrap
-[\fIOPTIONS\fR] \fICOMMAND\fR [\fIARGUMENTS\fR...]
+run [\fIOPTIONS\fR] -- \fICOMMAND\fR [\fIARGUMENTS\fR...]
 .br
 .B jobwrap \fISUBCOMMAND\fR [\fIARGS\fR]
 .SH DESCRIPTION
@@ -11,9 +11,10 @@ jobwrap \- wrap a locally launched Linux process with monitoring and control
 like a normal foreground command, while a per-user daemon provides a web
 interface, an HTTP API, and scoped control of the process.
 .PP
-If the first word is not a recognized subcommand it is treated as the command
-to run, so \fBjobwrap python3 analysis.py\fR works directly. Use
-\fBjobwrap -- COMMAND\fR to make that explicit.
+Start jobs explicitly with \fBjobwrap run [OPTIONS] -- COMMAND [ARGS...]\fR.
+Unknown subcommands, bare executable names, and the old \fBwrap\fR form are
+rejected before a process is started. \fBstatus JOB_ID\fR is an alias for
+\fBshow JOB_ID\fR, never an executable launch.
 .SH WRAPPER OPTIONS
 .TP
 .B \-\-name \fINAME\fR
@@ -22,9 +23,12 @@ A human-readable name for the job.
 .B \-\-profile \fINAME\fR
 The access profile to use (defaults to the configured profile).
 .TP
-.B \-\-detach
-Reserved for future use. This release returns an error before starting the
-command.
+.B \-d, \-\-detach
+Start the wrapper in a separate systemd user service, outside the launching
+terminal or agent's process tree and cgroup. Requires systemd-run and a working
+user manager. Returns zero after job registration, before workload completion.
+Check the job state and application readiness separately. Preserves the caller's
+working directory, arguments, and environment. Conflicts with --no-web.
 .TP
 .B \-\-no-web
 Do not start or use the web server.
@@ -33,11 +37,17 @@ Do not start or use the web server.
 Do not record terminal output to the log.
 .SH SUBCOMMANDS
 .TP
+.B run [\fIOPTIONS\fR] -- \fICOMMAND\fR [\fIARGS\fR...]
+Run a foreground job, or an independent user service with --detach (-d).
+.TP
 .B list
 List registered jobs.
 .TP
 .B show \fIJOB\fR
 Show detailed information about one job.
+.TP
+.B status \fIJOB\fR
+Alias for show. Includes the final exit code or termination signal.
 .TP
 .B logs \fIJOB\fR [\-\-offset N]
 Print a job's recorded output.
@@ -80,8 +90,22 @@ Inspect static executable metadata and man pages.
 .B terminals
 List registered terminals.
 .SH EXIT STATUS
-The wrapper returns the child's exit code. Signals are reported as 128 plus the
-signal number. Internal failures before the child starts use dedicated codes.
+Foreground run returns the child's exit code. Signals are reported as 128 plus
+the signal number. Detached run returns zero once registration is confirmed;
+the child result is reported by show/status. Parsing errors exit 2 without
+starting a job; internal failures return nonzero. A detached startup timeout
+may have an uncertain outcome: inspect the reported job ID and service before
+retrying.
+.SH DETACHED LIFETIME
+Each detached job belongs to jobwrap-job-JOB_ID.service. Use jobwrap stop JOB_ID
+and confirm its final state. If daemon monitoring is lost, inspect the service
+with systemctl --user status and journalctl --user -u, or terminate it with
+systemctl --user stop using that exact service name.
+.PP
+Services survive daemon shutdown but wrapper reconnection is not implemented:
+a restarted daemon marks their records disconnected and cannot record/control
+them. User-manager shutdown, logout policy, reboot, and explicit service stops
+can still terminate jobs. No boot persistence or automatic restart is configured.
 .SH FILES
 .TP
 .I ~/.config/jobwrap/config.toml
@@ -97,7 +121,8 @@ SQLite database.
 Append-only terminal logs.
 .SH SECURITY
 See \fI/usr/share/doc/jobwrap/README.md.gz\fR and the security model. The daemon
-is restricted to loopback. Daemon/API process creation is disabled by default.
+binds to loopback by default. HTTP API process creation is disabled by default;
+local detached launches use the private owner-authenticated Unix socket.
 .SH SEE ALSO
 .BR jobwrapd (8),
 .BR jobwrap.toml (5)

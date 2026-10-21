@@ -22,7 +22,7 @@ RAII guard.
 ## Consequences
 
 * Output is raw bytes end to end (not UTF-8).
-* Nested interactive shells have edge cases; `jobwrap bash` is supported but
+* Nested interactive shells have edge cases; `jobwrap run -- bash` is supported but
   not the first acceptance criterion.
 * All low-level OS code is isolated in `jobwrap-pty`; the only `unsafe` in the
   workspace lives there, with documented safety invariants.

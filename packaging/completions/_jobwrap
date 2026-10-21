@@ -4,9 +4,10 @@
 _jobwrap() {
     local -a subcommands
     subcommands=(
-        'wrap:Run a command under jobwrap'
+        'run:Run a command under jobwrap'
         'list:List registered jobs'
         'show:Show job details'
+        'status:Show job details (alias for show)'
         'logs:Print a job output log'
         'attach:Attach to a job (experimental)'
         'signal:Send a named signal'
@@ -25,11 +26,18 @@ _jobwrap() {
 
     if (( CURRENT == 2 )); then
         _describe 'command' subcommands
-        _files
         return
     fi
 
     case "${words[2]}" in
+        run)
+            _arguments '-d[Run in an independent user service]' \
+                '--detach[Run in an independent user service]' \
+                '-n[Job name]:name:' '--name[Job name]:name:' \
+                '--profile[Access profile]:profile:' \
+                '--no-web[Disable monitoring]' '--no-record[Disable recording]' \
+                '--help[Show help]' '*::command: _normal'
+            ;;
         signal)
             if (( CURRENT == 4 )); then
                 _values 'signal' int term hup quit stop cont kill
