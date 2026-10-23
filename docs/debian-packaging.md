@@ -13,15 +13,17 @@ before building on an offline machine.
 ```sh
 python3 packaging/build-deb.py
 # Only the application package:
-python3 packaging/build-deb.py --codex-skills no
-# Only the architecture-independent skill package:
+python3 packaging/build-deb.py --skills no
+# Only the architecture-independent skill packages:
 python3 packaging/build-deb.py --skills-only
 ```
 
-The default creates both `target/debian/jobwrap_VERSION_ARCH.deb` and
-`target/debian/jobwrap-codex-skills_VERSION_all.deb`. Building the skill package
-does not install or activate it. Options are explicit and never prompt, so
-release automation can select `--codex-skills yes` or `--codex-skills no`.
+The default creates `target/debian/jobwrap_VERSION_ARCH.deb` and one
+`target/debian/jobwrap-AGENT-skills_VERSION_all.deb` for each supported agent:
+`codex`, `claude`, `opencode`, and `kilo`. Building the skill packages does not
+install or activate them. Options are explicit and never prompt, so release
+automation can select `--skills yes` or `--skills no`. The former
+`--codex-skills` spelling is still accepted and selects all skill packages.
 Old artifacts are retained; select the intended versions rather than using a
 wildcard that also matches previous builds.
 
@@ -43,11 +45,13 @@ For example, inspect the current amd64 release without installing it:
 
 ```sh
 python3 packaging/test-deb.py \
-  target/debian/jobwrap_0.1.0-1_amd64.deb \
-  target/debian/jobwrap-codex-skills_0.1.0-1_all.deb
-lintian target/debian/jobwrap_0.1.0-1_amd64.deb \
-  target/debian/jobwrap-codex-skills_0.1.0-1_all.deb
+  target/debian/jobwrap_0.2.1-1_amd64.deb \
+  target/debian/jobwrap-{codex,claude,opencode,kilo}-skills_0.2.1-1_all.deb
+lintian target/debian/jobwrap_0.2.1-1_amd64.deb \
+  target/debian/jobwrap-{codex,claude,opencode,kilo}-skills_0.2.1-1_all.deb
 ```
+
+The package test accepts any non-empty selection of skill packages.
 
 ## Practical release package (cargo-deb)
 
@@ -60,7 +64,7 @@ cargo deb --package jobwrap-cli --no-build
 ```
 
 The Python builder is the tested path and additionally builds the optional
-skills package; `cargo-deb` must be installed separately. Release binary
+skill packages; `cargo-deb` must be installed separately. Release binary
 packages are suitable for direct `apt install ./jobwrap_VERSION_ARCH.deb`.
 
 Installed files:
@@ -100,32 +104,71 @@ Open a new shell after installation. Packaging does not edit shell startup
 files. Completions cover subcommands and common options, and do not start the
 daemon to query job IDs.
 
-## Optional Codex skills
+## Optional agent skills
 
-The established package-selection pattern is a separate optional package.
-`jobwrap` only **Suggests** `jobwrap-codex-skills`, so normal APT installation
-does not select it automatically. Install one or both packages as desired.
-The skill package depends on the matching application version.
+The established package-selection pattern is one separate optional package per
+coding agent. `jobwrap` only **Suggests** the skill packages, so normal APT
+installation does not select them automatically. Install any combination. Each
+skill package depends on the matching application version and contains its own
+copy of `SKILL.md` and both references:
+
+| Package | Agent | Installed files |
+| --- | --- | --- |
+| `jobwrap-codex-skills` | Codex | `/etc/codex/skills/jobwrap/` |
+| `jobwrap-claude-skills` | Claude Code | `/etc/claude-code/.claude/skills/jobwrap/` |
+| `jobwrap-opencode-skills` | OpenCode | `/etc/opencode/skills/jobwrap/`, `/etc/opencode/opencode.jsonc` |
+| `jobwrap-kilo-skills` | Kilo | `/etc/kilo/skills/jobwrap/`, `/etc/kilo/kilo.jsonc` |
 
 Run these as an administrator (substitute the actual version/architecture):
 
 ```sh
 # Application only; no skill installation:
-apt install ./jobwrap_0.1.0-1_amd64.deb
-# Application and skill:
-apt install ./jobwrap_0.1.0-1_amd64.deb ./jobwrap-codex-skills_0.1.0-1_all.deb
-# Unattended application and skill installation:
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  ./jobwrap_0.1.0-1_amd64.deb ./jobwrap-codex-skills_0.1.0-1_all.deb
-# Unattended application-only installation: omit the skill package above.
+apt install ./jobwrap_0.2.1-1_amd64.deb
+# Application and the Codex and Claude Code skills:
+apt install ./jobwrap_0.2.1-1_amd64.deb ./jobwrap-codex-skills_0.2.1-1_all.deb \
+  ./jobwrap-claude-skills_0.2.1-1_all.deb
+# Unattended installation with every skill package:
+DEBIAN_FRONTEND=noninteractive apt-get install -y ./jobwrap_0.2.1-1_amd64.deb \
+  ./jobwrap-{codex,claude,opencode,kilo}-skills_0.2.1-1_all.deb
 ```
 
-The package installs `SKILL.md` and both references under
-`/etc/codex/skills/jobwrap/`, the documented
-[Codex administrator skill location](https://developers.openai.com/codex/skills).
-This makes the skill available for **all users** on the machine. No home directories or
-Codex user configuration are modified. Existing personal copies can cause
-duplicate skills; choose the system package or a personal copy deliberately.
+Each package makes the skill available to **all users** of that agent on the
+machine. No home directories or user configuration are modified.
+
+- **Codex** reads the documented
+  [administrator skill location](https://developers.openai.com/codex/skills).
+- **Claude Code** reads enterprise skills from `.claude/skills/` inside its
+  [managed settings directory](https://code.claude.com/docs/en/skills), which
+  is `/etc/claude-code/` on Linux. An enterprise skill takes precedence over a
+  personal or project skill with the same name. No `managed-settings.json` is
+  installed or required.
+- **OpenCode** and **Kilo** have no administrator skill directory. Their
+  packages install the skill under the agent's managed configuration directory
+  and a managed configuration file whose `skills.paths` adds that directory to
+  discovery. OpenCode reads `opencode.json` and `opencode.jsonc` from
+  `/etc/opencode/`; Kilo reads `kilo.json`, `kilo.jsonc`, `opencode.json`, and
+  `opencode.jsonc` from `/etc/kilo/`. Managed configuration has the highest
+  precedence and its `skills.paths` list **replaces** lists from user and
+  project configuration rather than extending them. If users rely on their own
+  `skills.paths`, add those directories to the installed managed file (it is a
+  conffile, so the edit is preserved), or use a personal skill install instead.
+  If an administrator already created a file with the same name, dpkg asks its
+  standard conffile question during installation instead of silently replacing
+  it; keeping the existing file also keeps the package's skill undiscovered
+  until its `skills.paths` entry is merged into that file.
+
+Existing personal copies can create duplicates. Claude Code prefers the
+enterprise copy. OpenCode and Kilo log a duplicate-name warning and use the
+last copy they load, which is the managed `skills.paths` copy. Codex can show
+both. Choose the system package or a personal copy deliberately; see
+[Agent skill setup](agent-skills.md) for personal installs.
+
+Verify discovery without starting an agent task:
+
+```sh
+opencode debug skill --pure
+kilo debug skill --pure
+```
 
 Files in `/etc` are registered as Debian conffiles, preserving administrator
 edits during upgrades. As with other conffiles, local edits may trigger dpkg's
@@ -133,16 +176,17 @@ standard upgrade question; `DEBIAN_FRONTEND` controls debconf, not those
 questions. For unattended upgrades, select your configuration-management
 policy, for example `-o Dpkg::Options::=--force-confdef -o
 Dpkg::Options::=--force-confold` to retain local edits when needed.
-`apt remove jobwrap-codex-skills` retains these configuration files and therefore
-may leave the skill discoverable; use `apt purge jobwrap-codex-skills` to remove
-the system skill completely. Packaging never removes personal skill copies.
+`apt remove jobwrap-AGENT-skills` retains these configuration files and
+therefore may leave the skill discoverable; use `apt purge jobwrap-AGENT-skills`
+to remove the system skill completely. Packaging never removes personal skill
+copies.
 
 There is no custom installer prompt or custom `apt`/`dpkg` parameter.
 [Debian Policy §3.9.1](https://www.debian.org/doc/debian-policy/ch-binary.html#prompting-in-maintainer-scripts)
 uses debconf for necessary package configuration questions; unattended answers
 use debconf preseeding and `DEBIAN_FRONTEND=noninteractive`. That machinery is
 appropriate for required configuration, but optional integration can be
-selected directly as a package. Neither package has maintainer scripts.
+selected directly as a package. No package has maintainer scripts.
 
 ## Debian-policy package
 

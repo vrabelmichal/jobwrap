@@ -48,7 +48,7 @@ class ReleaseTests(unittest.TestCase):
         work = Path(tempfile.mkdtemp(prefix="release-test-", dir=ROOT / "target"))
         assets = work / "target/debian"
         assets.mkdir(parents=True)
-        for name in ("jobwrap_0.1.0-1_amd64.deb", "jobwrap-codex-skills_0.1.0-1_all.deb"):
+        for name in ["jobwrap_0.1.0-1_amd64.deb"] + [n + "_0.1.0-1_all.deb" for n in G["SKILL_PACKAGES"]]:
             (assets / name).write_bytes(b"test asset " + name.encode())
         calls = []
         status_calls = 0
@@ -100,6 +100,8 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(command[command.index("--repo") + 1], "owner/project")
             self.assertEqual(writes[0][4], "a" * 40)
             self.assertTrue(any(p.endswith("SHA256SUMS") for p in command))
+            for name in G["SKILL_PACKAGES"]:
+                self.assertTrue(any(Path(p).name.startswith(name + "_") for p in command), name)
         if dry_run:
             check_remote.assert_not_called()
 

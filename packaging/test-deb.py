@@ -3,7 +3,7 @@
 
 Copy packaged binaries under target/debian to verify their build identity.
 
-Usage: python3 packaging/test-deb.py MAIN.deb SKILLS.deb
+Usage: python3 packaging/test-deb.py MAIN.deb SKILLS.deb [SKILLS.deb...]
 """
 
 import gzip
@@ -12,6 +12,8 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import runpy
 import socket
 import subprocess
 import sys
@@ -20,6 +22,10 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SKILL_PACKAGES = runpy.run_path(str(ROOT / "packaging/build-deb.py"))["SKILL_PACKAGES"]
 
 
 def contents(archive, option):
@@ -93,14 +99,40 @@ def verify_server_build(work, version, commit):
     print("Packaged CLI, API and web footer build identities match.", flush=True)
 
 
+def verify_skills(archive, main_fields):
+    """Check one agent skill package against its source files and destination."""
+    files, control, fields = inspect(archive)
+    agent, directory, config = SKILL_PACKAGES[fields["Package"]]
+    assert fields["Package"] in main_fields["Suggests"], fields["Package"]
+    assert fields["Architecture"] == "all"
+    assert fields["Depends"] == "jobwrap (= {})".format(main_fields["Version"])
+    assert fields["Description"].endswith(" " + agent), fields["Description"]
+    source = ROOT / "skills/jobwrap"
+    expected = {directory + "/" + p.relative_to(source).as_posix(): p
+                for p in source.rglob("*") if p.is_file()}
+    assert directory + "/references/cli.md" in expected and len(expected) == 3, expected
+    if config:
+        expected[config[1]] = ROOT / config[0]
+        # Managed config is JSONC; only whole-line comments are used.
+        text = files[config[1]][1].decode()
+        settings = json.loads(re.sub(r"(?m)^\s*//.*$", "", text))
+        assert settings["skills"]["paths"] == ["/" + str(Path(directory).parent)], settings
+    assert {p for p in files if p.startswith("etc/")} == set(expected)
+    assert set(control["conffiles"][1].decode().splitlines()) == {"/" + p for p in expected}
+    for path, source in expected.items():
+        assert files[path][1] == source.read_bytes(), path
+    return files, fields
+
+
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) < 3:
         sys.exit(__doc__)
     main_files, _, main_fields = inspect(Path(sys.argv[1]))
-    skill_files, skill_control, skill_fields = inspect(Path(sys.argv[2]))
+    skills = [verify_skills(Path(archive), main_fields) for archive in sys.argv[2:]]
+    names = [fields["Package"] for _, fields in skills]
+    assert len(set(names)) == len(names), names
     assert main_fields["Package"] == "jobwrap"
     assert "libc6" in main_fields["Depends"]
-    assert "jobwrap-codex-skills" in main_fields["Suggests"]
     assert not any(p.startswith("etc/") for p in main_files)
     for binary in ("usr/bin/jobwrap", "usr/libexec/jobwrap/jobwrapd"):
         member, data = main_files[binary]
@@ -114,14 +146,7 @@ def main():
         assert main_files[path][1], path
     assert b"Type=simple" in main_files["usr/lib/systemd/user/jobwrapd.service"][1]
     assert "usr/lib/systemd/user/jobwrapd.socket" not in main_files
-    assert skill_fields["Package"] == "jobwrap-codex-skills"
-    assert skill_fields["Architecture"] == "all"
-    assert skill_fields["Depends"] == "jobwrap (= {})".format(main_fields["Version"])
-    expected = {"etc/codex/skills/jobwrap/SKILL.md", "etc/codex/skills/jobwrap/references/cli.md",
-                "etc/codex/skills/jobwrap/references/api.md"}
-    assert {p for p in skill_files if p.startswith("etc/")} == expected
-    assert set(skill_control["conffiles"][1].decode().splitlines()) == {"/" + p for p in expected}
-    root = Path(__file__).resolve().parents[1]
+    root = ROOT
     # Execute the binaries from the archive, not a potentially stale local
     # build. All verification artifacts stay inside the repository.
     directory = root / "target/debian"
@@ -143,9 +168,7 @@ def main():
         assert "commit: " + commit in reported, reported
         assert "build dirty: false" in reported, reported
     verify_server_build(work, version, commit)
-    for path in expected:
-        assert skill_files[path][1] == (root / "skills/jobwrap" / path.split("jobwrap/", 1)[1]).read_bytes()
-    for fields, files in ((main_fields, main_files), (skill_fields, skill_files)):
+    for files, fields in [(main_files, main_fields), *skills]:
         prefix = "usr/share/doc/" + fields["Package"] + "/"
         assert "MIT" in files[prefix + "copyright"][1].decode()
         assert gzip.decompress(files[prefix + "changelog.gz"][1])

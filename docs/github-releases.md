@@ -9,9 +9,10 @@ python3 packaging/release-github.py --maintainer 'Your Name <your-real-email>'
 
 It publishes to the GitHub repository configured as the `origin` push remote
 (currently `vrabelmichal/jobwrap`). The command uploads the native-architecture
-application package, the architecture-independent optional Codex skills
-package, and `SHA256SUMS`. GitHub also supplies source archives for the tag.
-Downloadable assets appear on the release page under **Assets**.
+application package, the architecture-independent optional skill packages for
+Codex, Claude Code, OpenCode, and Kilo, and `SHA256SUMS`. GitHub also supplies
+source archives for the tag. Downloadable assets appear on the release page
+under **Assets**.
 
 Prerequisites are the [Debian build prerequisites](debian-packaging.md), `git`,
 and authenticated `gh` with permission to push tags and create releases in the

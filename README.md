@@ -136,16 +136,18 @@ closed until their lifecycle/control integrations are complete. See
 
 ## Debian packages
 
-Build application and optional Codex skill packages with
-`python3 packaging/build-deb.py`; use `--codex-skills no` to build only the
+Build the application and optional agent skill packages with
+`python3 packaging/build-deb.py`; use `--skills no` to build only the
 application. Manpages and Bash/Zsh/Fish completions are included. Install the
-separate `jobwrap-codex-skills` package only if you want the skill available to
-all machine users. See [Debian packaging](docs/debian-packaging.md) for build
-prerequisites, installation choices, unattended commands, and verification.
+separate `jobwrap-codex-skills`, `jobwrap-claude-skills`,
+`jobwrap-opencode-skills`, or `jobwrap-kilo-skills` package only if you want the
+skill available to all machine users of that agent. See
+[Debian packaging](docs/debian-packaging.md) for build prerequisites,
+installation choices, unattended commands, and verification.
 
-For personal skill discovery in Codex, Kilo, and OpenCode, see
-[Agent skill setup](docs/agent-skills.md). The shared user directory avoids
-maintaining separate copies for each tool.
+For personal skill discovery in Codex, Kilo, OpenCode, and Claude Code, see
+[Agent skill setup](docs/agent-skills.md). The shared `~/.agents/skills/`
+directory serves the first three; Claude Code uses `~/.claude/skills/`.
 
 Publish downloadable packages on GitHub with
 `python3 packaging/release-github.py --maintainer 'Name <your-real-email>'`.

@@ -18,6 +18,17 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# Optional, separately selectable agent integrations. Each package owns its own
+# copy of skills/jobwrap; OpenCode and Kilo have no administrator skill
+# directory, so their packages also add one to discovery via managed config.
+SKILL_PACKAGES = {
+    "jobwrap-codex-skills": ("Codex", "etc/codex/skills/jobwrap", None),
+    "jobwrap-claude-skills": ("Claude Code", "etc/claude-code/.claude/skills/jobwrap", None),
+    "jobwrap-opencode-skills": ("OpenCode", "etc/opencode/skills/jobwrap",
+                                ("packaging/skills/opencode.jsonc", "etc/opencode/opencode.jsonc")),
+    "jobwrap-kilo-skills": ("Kilo", "etc/kilo/skills/jobwrap",
+                            ("packaging/skills/kilo.jsonc", "etc/kilo/kilo.jsonc")),
+}
 
 
 def local(path):
@@ -66,7 +77,7 @@ def build_package(name, version, architecture, assets, metadata, output, depends
     doc = stage / "usr/share/doc" / name
     write(doc / "copyright", ("Copyright: " + metadata["copyright"] + "\n\n").encode()
           + (ROOT / "LICENSE").read_bytes())
-    if name == "jobwrap-codex-skills":
+    if name in SKILL_PACKAGES:
         write(doc / "changelog.gz", gzip.compress((ROOT / "CHANGELOG.md").read_bytes(), mtime=0))
     else:
         # dpkg-shlibdeps needs a source control file even when writing deps to stdout.
@@ -92,8 +103,14 @@ def build_package(name, version, architecture, assets, metadata, output, depends
         description = "Wrap Linux processes with monitoring and scoped control"
         extended = " Run commands in a pseudo-terminal while a per-user daemon exposes\n status, output, and narrowly authorized process control."
     else:
-        description = "Optional system-wide jobwrap skill for Codex"
-        extended = " Install jobwrap workflow instructions and references in Codex's\n administrator skill directory, making the skill available to all users."
+        agent, _, config = SKILL_PACKAGES[name]
+        description = "Optional system-wide jobwrap skill for " + agent
+        if config:
+            extended = (" Install jobwrap workflow instructions and references, and a managed\n"
+                        " {} configuration adding them to skill discovery for all users.").format(agent)
+        else:
+            extended = (" Install jobwrap workflow instructions and references in {}'s\n"
+                        " administrator skill directory, making the skill available to all users.").format(agent)
     fields.append("Installed-Size: " + str(sum(p.stat().st_size for p in stage.rglob("*")
                                              if p.is_file()) // 1024 + 1))
     fields.append("Description: " + description + "\n" + extended)
@@ -114,17 +131,18 @@ def build_package(name, version, architecture, assets, metadata, output, depends
 def main():
     os.umask(0o022)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--codex-skills", choices=("yes", "no"), default="yes",
-                        help="build the separate optional skills package (default: yes)")
-    parser.add_argument("--skills-only", action="store_true", help="build only the skills package")
+    # --codex-skills is the former name, from when Codex had the only skill package.
+    parser.add_argument("--skills", "--codex-skills", dest="skills", choices=("yes", "no"), default="yes",
+                        help="build the separate optional agent skill packages (default: yes)")
+    parser.add_argument("--skills-only", action="store_true", help="build only the skill packages")
     parser.add_argument("--no-build", action="store_true", help="package existing release binaries")
     parser.add_argument("--revision", default="1", help="Debian package revision (default: 1)")
     parser.add_argument("--maintainer", help="release maintainer, e.g. Name <email@example.org>")
     args = parser.parse_args()
     if not args.revision or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.+~" for c in args.revision):
         parser.error("revision must contain only letters, digits, '.', '+', or '~'")
-    if args.skills_only and args.codex_skills == "no":
-        parser.error("--skills-only conflicts with --codex-skills no")
+    if args.skills_only and args.skills == "no":
+        parser.error("--skills-only conflicts with --skills no")
 
     metadata = json.loads(run(["cargo", "metadata", "--offline", "--locked", "--no-deps", "--format-version", "1"]))
     package = next(p for p in metadata["packages"] if p["name"] == "jobwrap-cli")
@@ -149,11 +167,14 @@ def main():
                 dest += source.name
             assets.append((source, dest, mode))
         build_package("jobwrap", version, run(["dpkg", "--print-architecture"]), assets, deb, output)
-    if args.codex_skills == "yes":
-        assets = [(p, "etc/codex/skills/jobwrap/" + p.relative_to(ROOT / "skills/jobwrap").as_posix(), "644")
-                  for p in sorted((ROOT / "skills/jobwrap").rglob("*")) if p.is_file()]
-        build_package("jobwrap-codex-skills", version, "all", assets, deb, output,
-                      depends="jobwrap (= {})".format(version))
+    if args.skills == "yes":
+        for name, (_, directory, config) in SKILL_PACKAGES.items():
+            assets = [(p, directory + "/" + p.relative_to(ROOT / "skills/jobwrap").as_posix(), "644")
+                      for p in sorted((ROOT / "skills/jobwrap").rglob("*")) if p.is_file()]
+            if config:
+                assets.append((ROOT / config[0], config[1], "644"))
+            build_package(name, version, "all", assets, deb, output,
+                          depends="jobwrap (= {})".format(version))
 
 
 if __name__ == "__main__":

@@ -17,7 +17,9 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-local = runpy.run_path(str(ROOT / "packaging/build-deb.py"))["local"]
+BUILDER = runpy.run_path(str(ROOT / "packaging/build-deb.py"))
+local = BUILDER["local"]
+SKILL_PACKAGES = BUILDER["SKILL_PACKAGES"]
 
 
 def run(args):
@@ -81,8 +83,9 @@ def release(args):
              "--maintainer", maintainer], env=env)
     arch = run(["dpkg", "--print-architecture"])
     deb_version = version + "-" + args.revision
-    assets = [local(ROOT / "target/debian" / "jobwrap_{}_{}.deb".format(deb_version, arch)),
-              local(ROOT / "target/debian" / "jobwrap-codex-skills_{}_all.deb".format(deb_version))]
+    assets = [local(ROOT / "target/debian" / "jobwrap_{}_{}.deb".format(deb_version, arch))]
+    assets += [local(ROOT / "target/debian" / "{}_{}_all.deb".format(name, deb_version))
+               for name in SKILL_PACKAGES]
     execute([sys.executable, str(ROOT / "packaging/test-deb.py"), *map(str, assets)])
     # Catch source changes during the build before tagging or publishing it.
     if run(["git", "rev-parse", "HEAD"]) != commit or run(["git", "status", "--porcelain", "--untracked-files=normal"]):
@@ -94,16 +97,19 @@ def release(args):
     checksums = local(output / "SHA256SUMS")
     checksums.write_text("".join(hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.name + "\n" for p in assets))
     notes = local(output / "release-notes.md")
+    skills = "".join("- `{}`: {}\n".format(p.name, SKILL_PACKAGES[p.name.split("_", 1)[0]][0])
+                     for p in assets[1:])
     body = ("jobwrap {} (Debian revision {})\n\nBuilt from commit `{}` for `{}` on Linux.\n\n"
-            "Download the application `.deb` and optionally the `jobwrap-codex-skills` `.deb`. "
-            "The optional skill package makes the skill available to all machine users.\n\n"
+            "Download the application `.deb` and optionally the skill packages for the coding "
+            "agents you use. Each skill package makes the jobwrap skill available to all machine "
+            "users of that agent:\n\n{}\n"
             "Install as an administrator:\n\n```sh\napt install ./{}\n"
-            "# With optional Codex skills:\napt install ./{} ./{}\n```\n\n"
-            "Verify downloaded packages with `sha256sum -c SHA256SUMS` "
-            "(download both packages for this check).\n\n"
+            "# With optional skills, for example Codex and Claude Code:\napt install ./{} ./{} ./{}\n```\n\n"
+            "Verify downloaded packages with `sha256sum -c SHA256SUMS --ignore-missing`.\n\n"
             "The application includes manpages and Bash/Zsh/Fish completions. "
             "It does not enable a daemon at installation.\n").format(
-                version, args.revision, commit, arch, assets[0].name, assets[0].name, assets[1].name)
+                version, args.revision, commit, arch, skills, assets[0].name, assets[0].name,
+                assets[1].name, assets[2].name)
     if args.notes_file:
         body += "\n" + local(ROOT / args.notes_file).read_text()
     notes.write_text(body)

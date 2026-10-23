@@ -1,0 +1,11 @@
+// Installed by the jobwrap-opencode-skills Debian package.
+// Adds the system-wide jobwrap skill in /etc/opencode/skills to OpenCode
+// skill discovery for all users. Managed configuration has the highest
+// precedence: this skills.paths list replaces user and project lists, so add
+// any other skill paths needed on this machine here.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "skills": {
+    "paths": ["/etc/opencode/skills"]
+  }
+}

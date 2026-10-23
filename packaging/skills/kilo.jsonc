@@ -1,0 +1,11 @@
+// Installed by the jobwrap-kilo-skills Debian package.
+// Adds the system-wide jobwrap skill in /etc/kilo/skills to Kilo
+// skill discovery for all users. Managed configuration has the highest
+// precedence: this skills.paths list replaces user and project lists, so add
+// any other skill paths needed on this machine here.
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "skills": {
+    "paths": ["/etc/kilo/skills"]
+  }
+}
