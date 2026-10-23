@@ -87,6 +87,26 @@ All notable changes to jobwrap are documented in this file.
   connection is labeled separately from the job state instead of appearing as
   an unexplained `disconnected` status.
 
+## [0.2.1] - 2026-10-23
+
+### Added
+
+- Optional Debian packages `jobwrap-claude-skills`, `jobwrap-opencode-skills`,
+  and `jobwrap-kilo-skills` make the jobwrap skill available to every user of
+  Claude Code, OpenCode, and Kilo, alongside the existing
+  `jobwrap-codex-skills`. The Claude Code package uses the enterprise skill
+  directory `/etc/claude-code/.claude/skills/`. OpenCode and Kilo have no
+  administrator skill directory, so their packages add `/etc/opencode/skills`
+  or `/etc/kilo/skills` to discovery through a managed configuration file;
+  that managed `skills.paths` replaces user and project lists.
+- Personal skill setup documents Claude Code's `~/.claude/skills/` location
+  and linking the skill to a development checkout.
+
+### Changed
+
+- `packaging/build-deb.py --skills yes|no` selects all skill packages;
+  `--codex-skills` remains an alias. Releases upload every skill package.
+
 ## [0.2.0] - 2026-10-21
 
 ### Added

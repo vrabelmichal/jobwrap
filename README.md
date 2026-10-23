@@ -98,8 +98,8 @@ starts its tab title with the hostname and shows the hostname in the header,
 alongside its build information footer. Builds from source archives without
 Git metadata report the commit as `unknown`.
 
-The workspace version is the source of truth: application `0.2.0` is released
-as GitHub tag `v0.2.0` and Debian packages `0.2.0-1`, where `-1` is the Debian
+The workspace version is the source of truth: application `0.2.1` is released
+as GitHub tag `v0.2.1` and Debian packages `0.2.1-1`, where `-1` is the Debian
 packaging revision.
 
 ## Layout
