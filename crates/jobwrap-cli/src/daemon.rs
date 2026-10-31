@@ -181,6 +181,7 @@ fn protocol_tag(msg: &DaemonToClient) -> &'static str {
         DaemonToClient::ProbeResult { .. } => "probe_result",
         DaemonToClient::ProbeDeleted { .. } => "probe_deleted",
         DaemonToClient::TerminalList { .. } => "terminal_list",
+        DaemonToClient::Pruned { .. } => "pruned",
         DaemonToClient::ToWrapper(_) => "to_wrapper",
     }
 }

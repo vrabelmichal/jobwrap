@@ -405,6 +405,23 @@ fn handle_cli_message(
             let terminals = registry.list_terminals(owner);
             DaemonToClient::TerminalList { terminals }
         }
+        ClientToDaemon::PruneJobs {
+            older_than_days,
+            dry_run,
+        } => {
+            let actor = match owner {
+                Principal::LocalUnixUser { uid } => format!("unix:{uid}"),
+                _ => "unknown".to_string(),
+            };
+            match registry.prune_finished_jobs(older_than_days, dry_run, &actor) {
+                Ok((jobs, freed_log_bytes)) => DaemonToClient::Pruned {
+                    jobs,
+                    dry_run,
+                    freed_log_bytes,
+                },
+                Err(e) => err(Code::BadRequest, &e),
+            }
+        }
         ClientToDaemon::RegisterTerminal(t) => {
             let state = if t.ready {
                 crate::terminal::TerminalState::Ready

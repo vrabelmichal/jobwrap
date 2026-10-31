@@ -211,6 +211,15 @@ pub fn validate_effective(cfg: &EffectiveConfig) -> Vec<ValidationIssue> {
             }
         }
     }
+    if cfg.retention.auto_prune
+        && (cfg.retention.prune_after_days == 0 || cfg.retention.prune_after_days > 36_500)
+    {
+        issues.push(ValidationIssue::InvalidLimit {
+            field: "retention.prune_after_days",
+            value: cfg.retention.prune_after_days,
+            range: "1..=36500",
+        });
+    }
     if cfg.help.allow_interpreter_probes || cfg.help.allow_script_probes {
         if cfg.help.probe_timeout_seconds == 0 || cfg.help.probe_timeout_seconds > 30 {
             issues.push(ValidationIssue::InvalidLimit {

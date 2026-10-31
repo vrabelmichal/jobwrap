@@ -82,7 +82,18 @@ pub struct EffectiveConfig {
     pub launch: LaunchConfig,
     pub terminal: TerminalConfig,
     pub help: HelpConfig,
+    pub retention: RetentionConfig,
     pub profiles: BTreeMap<String, EffectiveProfile>,
+}
+
+/// Automatic pruning of finished jobs. Disabled unless `auto_prune` is set;
+/// `defaults.retain_completed_days` is unrelated and deletes nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetentionConfig {
+    pub auto_prune: bool,
+    /// Finished jobs (exited, signaled, lost) that ended more than this many
+    /// days ago are deleted with their logs and events.
+    pub prune_after_days: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +221,10 @@ impl EffectiveConfig {
                 probe_timeout_seconds: 3,
                 probe_output_limit_bytes: 1_048_576,
                 cache_results: true,
+            },
+            retention: RetentionConfig {
+                auto_prune: false,
+                prune_after_days: 90,
             },
             profiles,
         }
@@ -355,6 +370,14 @@ impl EffectiveConfig {
             }
             if let Some(v) = help.cache_results {
                 cfg.help.cache_results = v;
+            }
+        }
+        if let Some(retention) = &raw.retention {
+            if let Some(v) = retention.auto_prune {
+                cfg.retention.auto_prune = v;
+            }
+            if let Some(v) = retention.prune_after_days {
+                cfg.retention.prune_after_days = v;
             }
         }
         for (name, profile_file) in &raw.profiles {

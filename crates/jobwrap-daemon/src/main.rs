@@ -81,6 +81,32 @@ async fn main() -> Result<(), DaemonError> {
         }
     });
 
+    // Opt-in retention: without `[retention] auto_prune = true` nothing is
+    // ever deleted automatically.
+    let prune_task = config.retention.auto_prune.then(|| {
+        let registry = registry.clone();
+        let days = u32::try_from(config.retention.prune_after_days).unwrap_or(u32::MAX);
+        tracing::info!(days, "automatic pruning of finished jobs is enabled");
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                let registry = registry.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    registry.prune_finished_jobs(days, false, "retention")
+                })
+                .await;
+                match result {
+                    Ok(Ok((jobs, freed))) if !jobs.is_empty() => {
+                        tracing::info!(count = jobs.len(), freed, "pruned old finished jobs")
+                    }
+                    Ok(Err(error)) => tracing::warn!(%error, "automatic pruning failed"),
+                    _ => {}
+                }
+            }
+        })
+    });
+
     // Start the HTTP server: one listener per bind target.
     let service = Arc::new(service::DaemonService::new(registry.clone()));
     let router = build_router(service.clone());
@@ -137,6 +163,9 @@ async fn main() -> Result<(), DaemonError> {
     }
     tracing::info!("shutting down");
     reconcile_task.abort();
+    if let Some(task) = prune_task {
+        task.abort();
+    }
     http_task.abort();
     socket_task.abort();
     cleanup_runtime_files(&socket_path, &runtime.daemon_pid);

@@ -127,6 +127,23 @@ pub enum ClientToDaemon {
     },
     ListTerminals,
     RegisterTerminal(RegisterTerminal),
+
+    /// Delete finished jobs that ended more than `older_than_days` ago.
+    /// Local owner only; `dry_run` lists them without deleting.
+    PruneJobs {
+        older_than_days: u32,
+        dry_run: bool,
+    },
+}
+
+/// A job removed (or, in a dry run, selected) by pruning.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrunedJob {
+    pub id: JobId,
+    pub display_name: String,
+    pub state: JobState,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Request to create an API token.
@@ -320,6 +337,12 @@ pub enum DaemonToClient {
     },
     TerminalList {
         terminals: Vec<super::types::TerminalInfo>,
+    },
+    Pruned {
+        jobs: Vec<PrunedJob>,
+        dry_run: bool,
+        /// Log bytes freed; zero for a dry run.
+        freed_log_bytes: u64,
     },
 
     /// Control messages directed at a wrapper connection.

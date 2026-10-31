@@ -145,10 +145,48 @@ impl Store {
         Ok(out)
     }
 
+    /// Delete a job record and its event history. Audit entries are kept.
     pub fn delete_job(&mut self, id: JobId) -> Result<(), StoreError> {
-        self.conn
-            .execute("DELETE FROM jobs WHERE id = ?1", params![id.to_string()])?;
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM events WHERE job_id = ?1",
+            params![id.to_string()],
+        )?;
+        tx.execute("DELETE FROM jobs WHERE id = ?1", params![id.to_string()])?;
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Finished jobs (exited, signaled, lost) that ended before `cutoff`,
+    /// oldest first. A record without a finish time counts from its start.
+    ///
+    /// Unlike [`Store::list_jobs`] this reads every row, including records
+    /// the in-memory registry evicted.
+    pub fn finished_jobs_before(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> Result<Vec<JobRecord>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, record_json FROM jobs WHERE state IN ('exited', 'signaled', 'lost')",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, json) = row?;
+            let record: JobRecord =
+                serde_json::from_str(&json).map_err(|e| StoreError::Corrupt {
+                    job_id: id,
+                    detail: e.to_string(),
+                })?;
+            let ended = record.finished_at.unwrap_or(record.started_at);
+            if record.state.is_finished() && ended < cutoff {
+                out.push(record);
+            }
+        }
+        out.sort_by_key(|record| record.finished_at.unwrap_or(record.started_at));
+        Ok(out)
     }
 
     // ---- events ----
@@ -520,6 +558,43 @@ mod tests {
         assert_eq!(got.state, record.state);
         let jobs = store.list_jobs().expect("list");
         assert_eq!(jobs.len(), 1);
+    }
+
+    #[test]
+    fn finds_and_deletes_old_finished_jobs() {
+        let (_dir, mut store) = temp_store();
+        let now = Utc::now();
+        let mut old = sample_record();
+        old.state = JobState::Exited { code: 0 };
+        old.started_at = now - chrono::Duration::days(40);
+        old.finished_at = Some(now - chrono::Duration::days(39));
+        let mut lost = sample_record();
+        lost.state = JobState::Lost;
+        lost.started_at = now - chrono::Duration::days(50);
+        let mut recent = sample_record();
+        recent.state = JobState::Exited { code: 1 };
+        recent.finished_at = Some(now - chrono::Duration::days(1));
+        let mut running = sample_record();
+        running.started_at = now - chrono::Duration::days(100);
+        for record in [&old, &lost, &recent, &running] {
+            store.insert_job(record).expect("insert");
+            store
+                .insert_event(&Event::new(record.id, EventId(0), EventKind::Registered))
+                .expect("event");
+        }
+        let cutoff = now - chrono::Duration::days(30);
+        let found: Vec<JobId> = store
+            .finished_jobs_before(cutoff)
+            .expect("query")
+            .iter()
+            .map(|record| record.id)
+            .collect();
+        assert_eq!(found, [lost.id, old.id]);
+
+        store.delete_job(old.id).expect("delete");
+        assert!(store.get_job(old.id).expect("get").is_none());
+        assert!(store.events_for_job(old.id).expect("events").is_empty());
+        assert_eq!(store.events_for_job(recent.id).expect("events").len(), 1);
     }
 
     #[test]

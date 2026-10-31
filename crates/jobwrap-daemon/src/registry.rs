@@ -713,6 +713,81 @@ impl Registry {
         Ok(())
     }
 
+    // ---- retention ----
+
+    /// Delete finished jobs (exited, signaled, lost) that ended more than
+    /// `older_than_days` ago, with their logs and events. Only ever called
+    /// for an explicit `jobwrap prune` or with `[retention] auto_prune`.
+    pub fn prune_finished_jobs(
+        &self,
+        older_than_days: u32,
+        dry_run: bool,
+        actor: &str,
+    ) -> Result<(Vec<jobwrap_protocol::PrunedJob>, u64), String> {
+        if older_than_days == 0 {
+            return Err("refusing to prune with an age of 0 days".into());
+        }
+        let cutoff = jobwrap_protocol::query::days_ago(Utc::now(), older_than_days);
+        let candidates = self
+            .store
+            .lock()
+            .expect("store lock")
+            .finished_jobs_before(cutoff)
+            .map_err(|e| format!("could not list old jobs: {e}"))?;
+        let describe = |record: &JobRecord| jobwrap_protocol::PrunedJob {
+            id: record.id,
+            display_name: record.display_name.as_str().to_string(),
+            state: record.state,
+            started_at: record.started_at,
+            finished_at: record.finished_at,
+        };
+        if dry_run {
+            return Ok((candidates.iter().map(describe).collect(), 0));
+        }
+        let mut jobs = self.jobs.lock().expect("jobs lock");
+        let mut store = self.store.lock().expect("store lock");
+        let mut pruned = Vec::new();
+        let mut freed = 0u64;
+        for record in candidates {
+            // The live registry is authoritative for state.
+            if jobs
+                .get(&record.id)
+                .is_some_and(|job| !job.record.state.is_finished())
+            {
+                continue;
+            }
+            match jobwrap_store::delete_log(&self.runtime.logs_dir, record.id) {
+                Ok(bytes) => freed += bytes,
+                Err(error) => {
+                    tracing::warn!(job_id = %record.id, %error, "could not delete log; keeping record");
+                    continue;
+                }
+            }
+            if let Err(error) = store.delete_job(record.id) {
+                tracing::warn!(job_id = %record.id, %error, "could not delete job record");
+                continue;
+            }
+            jobs.remove(&record.id);
+            pruned.push(describe(&record));
+        }
+        self.recorded_log_bytes.fetch_sub(
+            freed.min(self.recorded_log_bytes.load(Ordering::Acquire)),
+            Ordering::AcqRel,
+        );
+        if !pruned.is_empty() {
+            let _ = store.record_audit(
+                None,
+                actor,
+                "prune",
+                &format!(
+                    "deleted {} finished jobs older than {older_than_days} days",
+                    pruned.len()
+                ),
+            );
+        }
+        Ok((pruned, freed))
+    }
+
     // ---- detached services ----
 
     /// The service to ask about for a disconnected record, and whether the

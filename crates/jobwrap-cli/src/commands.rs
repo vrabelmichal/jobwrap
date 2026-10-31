@@ -38,6 +38,10 @@ pub fn dispatch(command: Command) -> anyhow::Result<()> {
         }
         Command::Inspect { target } => inspect(&target),
         Command::Terminals => terminals(),
+        Command::Prune {
+            older_than,
+            dry_run,
+        } => prune(older_than, dry_run),
     }
 }
 
@@ -93,6 +97,7 @@ fn tag(msg: &DaemonToClient) -> &'static str {
         DaemonToClient::ProbeResult { .. } => "probe_result",
         DaemonToClient::ProbeDeleted { .. } => "probe_deleted",
         DaemonToClient::TerminalList { .. } => "terminal_list",
+        DaemonToClient::Pruned { .. } => "pruned",
         DaemonToClient::ToWrapper(_) => "to_wrapper",
     }
 }
@@ -201,6 +206,51 @@ fn print_service(
     } else if !service.available {
         println!("hint:               check `systemctl --user status {unit}`");
     }
+}
+
+fn prune(older_than_days: u32, dry_run: bool) -> anyhow::Result<()> {
+    if older_than_days == 0 {
+        bail!("--older-than must be at least 1 day");
+    }
+    with_client(|client| {
+        match client.request(ClientToDaemon::PruneJobs {
+            older_than_days,
+            dry_run,
+        })? {
+            DaemonToClient::Pruned {
+                jobs,
+                dry_run,
+                freed_log_bytes,
+            } => {
+                for job in &jobs {
+                    let ended = job.finished_at.map(|t| t.to_rfc3339()).unwrap_or_else(|| {
+                        format!("unknown (started {})", job.started_at.to_rfc3339())
+                    });
+                    println!(
+                        "{:<26}  {:<10}  {}  ended {ended}",
+                        job.id, job.state, job.display_name
+                    );
+                }
+                if dry_run {
+                    println!(
+                        "{} finished job(s) older than {older_than_days} days would be deleted; nothing was deleted (dry run)",
+                        jobs.len()
+                    );
+                } else {
+                    println!(
+                        "deleted {} finished job(s) older than {older_than_days} days; freed {freed_log_bytes} bytes of logs",
+                        jobs.len()
+                    );
+                }
+                Ok(())
+            }
+            DaemonToClient::Error { message, .. } => bail!("{message}"),
+            other => bail!(
+                "unexpected daemon response: {:?}; upgrade and restart jobwrapd",
+                tag(&other)
+            ),
+        }
+    })
 }
 
 fn logs(job: &str, offset: u64) -> anyhow::Result<()> {
@@ -412,6 +462,11 @@ fn config(action: ConfigCommand) -> anyhow::Result<()> {
             println!(
                 "defaults.job_name_template = {}",
                 config.defaults.job_name_template
+            );
+            println!("retention.auto_prune = {}", config.retention.auto_prune);
+            println!(
+                "retention.prune_after_days = {}",
+                config.retention.prune_after_days
             );
             for (name, profile) in &config.profiles {
                 println!(
@@ -858,6 +913,13 @@ default_probe_argument = "--help"
 probe_timeout_seconds = 3
 probe_output_limit_bytes = 1048576
 cache_results = true
+
+# Finished job records are kept until deleted. `jobwrap prune --older-than DAYS`
+# deletes old ones on request; set auto_prune = true to have the daemon delete
+# finished jobs older than prune_after_days every hour.
+[retention]
+auto_prune = false
+prune_after_days = 90
 
 # The standard profile is public: anyone on the local network can watch
 # output. Public output may itself contain secrets; choose the private

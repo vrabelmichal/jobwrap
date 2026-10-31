@@ -9,8 +9,8 @@ mod raw;
 mod validate;
 
 pub use effective::{
-    EffectiveConfig, EffectiveProfile, HelpConfig, LaunchConfig, Layer, TerminalConfig,
-    ValueSource, PROFILE_FIELDS,
+    EffectiveConfig, EffectiveProfile, HelpConfig, LaunchConfig, Layer, RetentionConfig,
+    TerminalConfig, ValueSource, PROFILE_FIELDS,
 };
 pub use error::ConfigError;
 pub use paths::{ConfigPaths, RuntimePaths};
@@ -74,6 +74,26 @@ port = 9000
         let cfg = parse(text).expect("parses");
         assert_eq!(cfg.server.port, 9000);
         assert_eq!(cfg.server.bind, "127.0.0.1");
+    }
+
+    #[test]
+    fn pruning_is_opt_in() {
+        // The long-standing `retain_completed_days` key must never enable
+        // deletion of existing records.
+        let cfg =
+            parse("config_version = 1\n[defaults]\nretain_completed_days = 1\n").expect("parses");
+        assert!(!cfg.retention.auto_prune);
+        let cfg =
+            parse("config_version = 1\n[retention]\nauto_prune = true\nprune_after_days = 14\n")
+                .expect("parses");
+        assert!(cfg.retention.auto_prune);
+        assert_eq!(cfg.retention.prune_after_days, 14);
+        assert!(crate::validate_effective(&cfg).is_empty());
+        let cfg =
+            parse("config_version = 1\n[retention]\nauto_prune = true\nprune_after_days = 0\n")
+                .expect("parses");
+        assert!(!crate::validate_effective(&cfg).is_empty());
+        assert!(parse("config_version = 1\n[retention]\nkeep = 3\n").is_err());
     }
 
     #[test]

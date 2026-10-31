@@ -29,6 +29,8 @@ pub struct RawConfig {
     #[serde(default)]
     pub help: Option<HelpFile>,
     #[serde(default)]
+    pub retention: Option<RetentionFile>,
+    #[serde(default)]
     pub profiles: BTreeMap<String, ProfileFile>,
 }
 
@@ -137,6 +139,16 @@ pub struct HelpFile {
     pub probe_output_limit_bytes: Option<u64>,
     #[serde(default)]
     pub cache_results: Option<bool>,
+}
+
+/// Opt-in deletion of old finished job records.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetentionFile {
+    #[serde(default)]
+    pub auto_prune: Option<bool>,
+    #[serde(default)]
+    pub prune_after_days: Option<u64>,
 }
 
 /// A named access profile.

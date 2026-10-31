@@ -77,6 +77,17 @@ pub enum Command {
     Inspect { target: String },
     /// List registered terminals.
     Terminals,
+    /// Delete finished jobs (exited, signaled, lost) that ended more than
+    /// DAYS days ago, with their output logs and event history.
+    /// Running and disconnected jobs are never deleted.
+    Prune {
+        /// Age in days; required so nothing is deleted by accident.
+        #[arg(long, value_name = "DAYS", value_parser = clap::value_parser!(u32).range(1..))]
+        older_than: u32,
+        /// List what would be deleted without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -227,6 +238,21 @@ mod tests {
             args.command,
             [OsString::from("status"), OsString::from("literal arg")]
         );
+    }
+
+    #[test]
+    fn prune_requires_an_explicit_age() {
+        assert!(Cli::try_parse_from(["jobwrap", "prune"]).is_err());
+        assert!(Cli::try_parse_from(["jobwrap", "prune", "--older-than", "0"]).is_err());
+        let cli = Cli::try_parse_from(["jobwrap", "prune", "--older-than", "30", "--dry-run"])
+            .expect("prune");
+        assert!(matches!(
+            cli.command,
+            Command::Prune {
+                older_than: 30,
+                dry_run: true
+            }
+        ));
     }
 
     #[test]
