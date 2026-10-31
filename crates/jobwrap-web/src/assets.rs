@@ -37,8 +37,12 @@ const AUTH_CONTROLS: &str = r#"<div class="auth-controls" data-auth-controls>
   <span class="status-pill neutral">Session: checking…</span>
 </div>"#;
 
-pub fn index_page(jobs_json: &str, _authenticated: bool) -> String {
-    let jobs_json = html_attribute_escape(jobs_json);
+/// The dashboard. `page_json` is the serialized default
+/// [`jobwrap_protocol::JobPage`]; the script pages and filters from there.
+pub fn index_page(page_json: &str, _authenticated: bool) -> String {
+    let page_json = html_attribute_escape(page_json);
+    let recent_days = crate::job_list::DEFAULT_RECENT_DAYS;
+    let page_size = crate::job_list::DEFAULT_PAGE_SIZE;
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -99,8 +103,37 @@ pub fn index_page(jobs_json: &str, _authenticated: bool) -> String {
       </div>
       <button id="refresh-jobs" type="button" class="secondary-button">Refresh</button>
     </div>
-    <div id="job-list" data-jobs='{jobs_json}'></div>
-    <p id="job-list-meta" class="list-meta" aria-live="polite"></p>
+    <div class="jobs-filters" role="group" aria-label="Date filters">
+      <fieldset class="date-range">
+        <legend>Started</legend>
+        <label>from <input id="started-from" type="date"></label>
+        <label>to <input id="started-to" type="date"></label>
+      </fieldset>
+      <fieldset class="date-range">
+        <legend>Finished</legend>
+        <label>from <input id="finished-from" type="date"></label>
+        <label>to <input id="finished-to" type="date"></label>
+      </fieldset>
+      <label class="check-field"><input id="show-old-jobs" type="checkbox"> Include jobs finished more than {recent_days} days ago</label>
+      <button id="clear-job-filters" type="button" class="filter-button">Clear filters</button>
+    </div>
+    <div id="job-list" data-page='{page_json}' data-recent-days="{recent_days}" data-page-size="{page_size}"></div>
+    <div class="list-footer">
+      <p id="job-list-meta" class="list-meta" aria-live="polite"></p>
+      <div class="pager" aria-label="Pages">
+        <label class="page-size-field">Per page
+          <select id="page-size">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+        </label>
+        <button id="page-prev" type="button" class="secondary-button">&larr; Newer</button>
+        <span id="page-status" class="page-status"></span>
+        <button id="page-next" type="button" class="secondary-button">Older &rarr;</button>
+      </div>
+    </div>
   </section>
   <noscript><p>JavaScript is required to view live job data.</p></noscript>
 </main>

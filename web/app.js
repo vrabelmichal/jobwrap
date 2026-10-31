@@ -129,73 +129,197 @@ function shortJobId(id) {
 
 const jobListState = {
   jobs: [],
+  total: 0,
+  counts: { all: 0, active: 0, attention: 0, finished: 0 },
+  hiddenFinished: 0,
   filter: 'all',
   query: '',
+  startedFrom: '',
+  startedTo: '',
+  finishedFrom: '',
+  finishedTo: '',
+  showOld: false,
+  offset: 0,
+  pageSize: 50,
+  recentDays: 7,
+  requestId: 0,
 };
 
-function jobMatchesQuery(job, query) {
-  if (!query) return true;
-  const haystack = [
-    job.display_name,
-    job.profile_name,
-    job.id,
-    job.child_pid,
-    job.wrapper_pid,
-    job.visibility,
-    formatState(job.state),
-  ].filter((value) => value !== null && value !== undefined).join(' ').toLowerCase();
-  return haystack.includes(query);
+const JOB_FILTER_PARAMS = {
+  state: 'filter',
+  q: 'query',
+  started_from: 'startedFrom',
+  started_to: 'startedTo',
+  finished_from: 'finishedFrom',
+  finished_to: 'finishedTo',
+};
+
+// A YYYY-MM-DD value from a date input, as the start of that local day.
+// `nextDay` gives the exclusive end of the day for upper bounds.
+function localDayBoundary(value, nextDay) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + (nextDay ? 1 : 0));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-function updateJobSummary(jobs) {
-  const counts = { all: jobs.length, active: 0, attention: 0, finished: 0 };
-  for (const job of jobs) counts[stateGroup(job.state)] += 1;
+function hasDateFilter(state) {
+  return Boolean(state.startedFrom || state.startedTo || state.finishedFrom || state.finishedTo);
+}
+
+// Old finished jobs are hidden unless requested or a date range is chosen:
+// an explicit range should show everything inside it.
+function hidesOldJobs(state) {
+  return !state.showOld && !hasDateFilter(state);
+}
+
+function jobQueryParams(state) {
+  const params = new URLSearchParams();
+  if (state.filter && state.filter !== 'all') params.set('state', state.filter);
+  if (state.query) params.set('q', state.query);
+  const bounds = [
+    ['started_after', state.startedFrom, false],
+    ['started_before', state.startedTo, true],
+    ['finished_after', state.finishedFrom, false],
+    ['finished_before', state.finishedTo, true],
+  ];
+  for (const [name, value, nextDay] of bounds) {
+    const boundary = localDayBoundary(value, nextDay);
+    if (boundary) params.set(name, boundary);
+  }
+  if (hidesOldJobs(state)) params.set('hide_finished_older_than_days', String(state.recentDays));
+  params.set('offset', String(state.offset));
+  params.set('limit', String(state.pageSize));
+  return params;
+}
+
+// The address bar keeps filters so reloads, back navigation, and shared
+// links reopen the same view. Defaults are omitted.
+function dashboardSearch(state) {
+  const params = new URLSearchParams();
+  for (const [param, key] of Object.entries(JOB_FILTER_PARAMS)) {
+    if (state[key] && state[key] !== 'all') params.set(param, state[key]);
+  }
+  if (state.showOld) params.set('show_old', '1');
+  if (state.offset) params.set('offset', String(state.offset));
+  if (state.pageSize !== jobListState.defaultPageSize) params.set('per_page', String(state.pageSize));
+  const text = params.toString();
+  return text ? `?${text}` : '';
+}
+
+function restoreDashboardState(search) {
+  const params = new URLSearchParams(search || '');
+  let restored = false;
+  for (const [param, key] of Object.entries(JOB_FILTER_PARAMS)) {
+    const value = params.get(param);
+    if (param === 'state' && !['all', 'active', 'attention', 'finished'].includes(value)) continue;
+    if (value) {
+      jobListState[key] = value;
+      restored = true;
+    }
+  }
+  if (params.get('show_old') === '1') {
+    jobListState.showOld = true;
+    restored = true;
+  }
+  const offset = Number.parseInt(params.get('offset') || '', 10);
+  if (Number.isFinite(offset) && offset > 0) {
+    jobListState.offset = offset;
+    restored = true;
+  }
+  const perPage = Number.parseInt(params.get('per_page') || '', 10);
+  if ([25, 50, 100, 200].includes(perPage)) {
+    jobListState.pageSize = perPage;
+    restored = true;
+  }
+  return restored;
+}
+
+function applyJobPage(page) {
+  jobListState.jobs = Array.isArray(page.jobs) ? page.jobs : [];
+  jobListState.total = Number(page.total) || 0;
+  jobListState.counts = page.counts || { all: 0, active: 0, attention: 0, finished: 0 };
+  jobListState.hiddenFinished = Number(page.hidden_finished) || 0;
+}
+
+function updateJobSummary(counts) {
   setText('summary-all', counts.all);
   setText('summary-active', counts.active);
   setText('summary-attention', counts.attention);
   setText('summary-finished', counts.finished);
 }
 
+function renderPager() {
+  const { offset, pageSize, total } = jobListState;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(pages, Math.floor(offset / pageSize) + 1);
+  const status = document.getElementById('page-status');
+  if (status) status.textContent = `Page ${page} of ${pages}`;
+  const prev = document.getElementById('page-prev');
+  if (prev) prev.disabled = offset <= 0;
+  const next = document.getElementById('page-next');
+  if (next) next.disabled = offset + pageSize >= total;
+}
+
+function renderJobMeta() {
+  const meta = document.getElementById('job-list-meta');
+  if (!meta) return;
+  const { jobs, offset, total, hiddenFinished } = jobListState;
+  let text = total === 0
+    ? 'No matching jobs'
+    : `Showing ${offset + 1}–${offset + jobs.length} of ${total} job${total === 1 ? '' : 's'}`;
+  if (hiddenFinished > 0) {
+    text += ` · ${hiddenFinished} finished more than ${jobListState.recentDays} days ago hidden`;
+  }
+  meta.textContent = text;
+  if (hiddenFinished > 0) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'link-button';
+    button.textContent = 'Show them';
+    button.addEventListener('click', () => {
+      const checkbox = document.getElementById('show-old-jobs');
+      if (checkbox) checkbox.checked = true;
+      jobListState.showOld = true;
+      jobListState.offset = 0;
+      refreshJobs();
+    });
+    meta.append(' ', button);
+  }
+}
+
 function renderJobList() {
   const container = document.getElementById('job-list');
   if (!container) return;
 
-  const jobs = [...jobListState.jobs].sort((a, b) => {
-    const aTime = new Date(a.started_at || 0).getTime();
-    const bTime = new Date(b.started_at || 0).getTime();
-    return bTime - aTime;
-  });
-  updateJobSummary(jobs);
-
-  const visible = jobs.filter((job) => {
-    const filterOk = jobListState.filter === 'all' || stateGroup(job.state) === jobListState.filter;
-    return filterOk && jobMatchesQuery(job, jobListState.query);
-  });
-
-  const meta = document.getElementById('job-list-meta');
-  if (meta) {
-    meta.textContent = visible.length === jobs.length
-      ? `${jobs.length} job${jobs.length === 1 ? '' : 's'}`
-      : `Showing ${visible.length} of ${jobs.length} jobs`;
-  }
+  const jobs = jobListState.jobs;
+  updateJobSummary(jobListState.counts);
+  renderJobMeta();
+  renderPager();
 
   if (!jobs.length) {
-    container.innerHTML = '<div class="empty-state"><strong>No jobs yet</strong><p>Wrap a command from the terminal or create a job from the web interface.</p><a href="/jobs/new" class="primary-link inline-action">+ New job</a></div>';
-    return;
-  }
-  if (!visible.length) {
-    container.innerHTML = '<div class="empty-state"><strong>No matching jobs</strong><p>Try another search or state filter.</p></div>';
+    const filtered = jobListState.filter !== 'all' || jobListState.query || hasDateFilter(jobListState);
+    if (filtered) {
+      container.innerHTML = '<div class="empty-state"><strong>No matching jobs</strong><p>Try another search, state filter, or date range.</p></div>';
+    } else if (jobListState.hiddenFinished > 0) {
+      container.innerHTML = `<div class="empty-state"><strong>No recent jobs</strong><p>Only jobs that finished more than ${escapeHtml(jobListState.recentDays)} days ago exist. Include them with the checkbox above.</p></div>`;
+    } else if (jobListState.offset > 0) {
+      container.innerHTML = '<div class="empty-state"><strong>No more jobs</strong><p>This page is past the end of the list.</p></div>';
+    } else {
+      container.innerHTML = '<div class="empty-state"><strong>No jobs yet</strong><p>Wrap a command from the terminal or create a job from the web interface.</p><a href="/jobs/new" class="primary-link inline-action">+ New job</a></div>';
+    }
     return;
   }
 
   let html = '<table class="jobs"><thead><tr>' +
     '<th>Job</th><th>State</th><th>Process</th><th>Started</th><th>Runtime</th><th>Output</th></tr></thead><tbody>';
-  for (const job of visible) {
+  for (const job of jobs) {
     const terminal = job.terminal || {};
     const pid = job.child_pid === null || job.child_pid === undefined ? '—' : job.child_pid;
     const output = formatBytes(job.output_bytes);
     const truncated = job.log_truncated ? '<span class="row-warning">truncated</span>' : '';
     const visibility = job.visibility ? escapeHtml(job.visibility) : '—';
+    const finished = job.finished_at ? `<span class="row-subtitle">finished ${escapeHtml(formatDate(job.finished_at))}</span>` : '';
     html += `<tr>` +
       `<td data-label="Job"><a class="job-name" href="/jobs/${encodeURIComponent(job.id)}">${escapeHtml(job.display_name)}</a>` +
         `<span class="row-subtitle">${escapeHtml(job.profile_name)} · ${escapeHtml(shortJobId(job.id))}</span></td>` +
@@ -203,7 +327,7 @@ function renderJobList() {
         `<span class="row-subtitle">${visibility}</span></td>` +
       `<td data-label="Process"><span class="row-value">PID ${escapeHtml(pid)}</span>` +
         `<span class="row-subtitle">${terminal.attached ? 'terminal attached' : 'no terminal at launch'}</span></td>` +
-      `<td data-label="Started"><span class="row-value">${escapeHtml(formatDate(job.started_at))}</span></td>` +
+      `<td data-label="Started"><span class="row-value">${escapeHtml(formatDate(job.started_at))}</span>${finished}</td>` +
       `<td data-label="Runtime"><span class="row-value tabular">${escapeHtml(formatDuration(job.started_at, job.finished_at))}</span></td>` +
       `<td data-label="Output"><span class="row-value tabular">${escapeHtml(output)}</span>${truncated}</td>` +
       `</tr>`;
@@ -212,25 +336,64 @@ function renderJobList() {
   container.innerHTML = html;
 }
 
-function setJobFilter(filter) {
-  jobListState.filter = filter;
+function syncJobControls() {
   document.querySelectorAll('[data-job-filter]').forEach((button) => {
-    const selected = button.dataset.jobFilter === filter;
+    const selected = button.dataset.jobFilter === jobListState.filter;
     button.classList.toggle('is-selected', selected);
     button.setAttribute('aria-pressed', selected ? 'true' : 'false');
   });
-  renderJobList();
+  const values = {
+    'job-search': jobListState.query,
+    'started-from': jobListState.startedFrom,
+    'started-to': jobListState.startedTo,
+    'finished-from': jobListState.finishedFrom,
+    'finished-to': jobListState.finishedTo,
+    'page-size': String(jobListState.pageSize),
+  };
+  for (const [id, value] of Object.entries(values)) {
+    const input = document.getElementById(id);
+    if (input) input.value = value;
+  }
+  const showOld = document.getElementById('show-old-jobs');
+  if (showOld) {
+    showOld.checked = jobListState.showOld;
+    showOld.disabled = hasDateFilter(jobListState);
+    showOld.title = showOld.disabled ? 'Date filters already include older jobs.' : '';
+  }
+}
+
+function setJobFilter(filter) {
+  jobListState.filter = filter;
+  jobListState.offset = 0;
+  syncJobControls();
+  refreshJobs();
 }
 
 async function refreshJobs() {
   const refreshStatus = document.getElementById('jobs-refresh-status');
   const refreshButton = document.getElementById('refresh-jobs');
   if (refreshButton) refreshButton.disabled = true;
+  // Only the newest request may render; slower earlier responses are stale.
+  const requestId = ++jobListState.requestId;
   try {
-    const response = await fetch('/api/v1/jobs', { cache: 'no-store' });
-    if (!response.ok) throw new Error(response.statusText || 'could not load jobs');
-    jobListState.jobs = await response.json();
+    const response = await fetch(`/api/v1/jobs/query?${jobQueryParams(jobListState)}`, { cache: 'no-store' });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error((err.error && err.error.message) || response.statusText || 'could not load jobs');
+    }
+    const page = await response.json();
+    if (requestId !== jobListState.requestId) return;
+    applyJobPage(page);
+    // A shrinking list can leave the current page past the end.
+    if (jobListState.offset > 0 && jobListState.offset >= jobListState.total) {
+      jobListState.offset = Math.max(0, Math.floor((jobListState.total - 1) / jobListState.pageSize) * jobListState.pageSize);
+      refreshJobs();
+      return;
+    }
     renderJobList();
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState(null, '', `${window.location.pathname}${dashboardSearch(jobListState)}`);
+    }
     if (refreshStatus) refreshStatus.textContent = 'refreshes every 5 s';
   } catch (error) {
     if (refreshStatus) refreshStatus.textContent = `refresh failed: ${error.message}`;
@@ -242,18 +405,84 @@ async function refreshJobs() {
 function initJobList() {
   const container = document.getElementById('job-list');
   if (!container) return;
+  jobListState.recentDays = Number(container.dataset.recentDays) || 7;
+  jobListState.pageSize = Number(container.dataset.pageSize) || 50;
+  jobListState.defaultPageSize = jobListState.pageSize;
   try {
-    jobListState.jobs = JSON.parse(container.dataset.jobs || '[]');
+    applyJobPage(JSON.parse(container.dataset.page || '{}'));
   } catch (error) {
-    jobListState.jobs = [];
+    applyJobPage({});
   }
+  // The server renders the default view; a URL with filters needs a fetch.
+  const restored = restoreDashboardState(window.location.search);
+  syncJobControls();
   renderJobList();
+  if (restored) refreshJobs();
 
   const search = document.getElementById('job-search');
+  let searchTimer = null;
   if (search) {
     search.addEventListener('input', () => {
-      jobListState.query = search.value.trim().toLowerCase();
-      renderJobList();
+      jobListState.query = search.value.trim();
+      jobListState.offset = 0;
+      window.clearTimeout(searchTimer);
+      searchTimer = window.setTimeout(refreshJobs, 250);
+    });
+  }
+  const dateInputs = {
+    'started-from': 'startedFrom',
+    'started-to': 'startedTo',
+    'finished-from': 'finishedFrom',
+    'finished-to': 'finishedTo',
+  };
+  for (const [id, key] of Object.entries(dateInputs)) {
+    const input = document.getElementById(id);
+    if (!input) continue;
+    input.addEventListener('change', () => {
+      jobListState[key] = input.value;
+      jobListState.offset = 0;
+      syncJobControls();
+      refreshJobs();
+    });
+  }
+  const showOld = document.getElementById('show-old-jobs');
+  if (showOld) {
+    showOld.addEventListener('change', () => {
+      jobListState.showOld = showOld.checked;
+      jobListState.offset = 0;
+      refreshJobs();
+    });
+  }
+  const clear = document.getElementById('clear-job-filters');
+  if (clear) {
+    clear.addEventListener('click', () => {
+      Object.assign(jobListState, {
+        filter: 'all', query: '', startedFrom: '', startedTo: '', finishedFrom: '', finishedTo: '', showOld: false, offset: 0,
+      });
+      syncJobControls();
+      refreshJobs();
+    });
+  }
+  const pageSize = document.getElementById('page-size');
+  if (pageSize) {
+    pageSize.addEventListener('change', () => {
+      jobListState.pageSize = Number(pageSize.value) || jobListState.defaultPageSize;
+      jobListState.offset = 0;
+      refreshJobs();
+    });
+  }
+  const prev = document.getElementById('page-prev');
+  if (prev) {
+    prev.addEventListener('click', () => {
+      jobListState.offset = Math.max(0, jobListState.offset - jobListState.pageSize);
+      refreshJobs();
+    });
+  }
+  const next = document.getElementById('page-next');
+  if (next) {
+    next.addEventListener('click', () => {
+      jobListState.offset += jobListState.pageSize;
+      refreshJobs();
     });
   }
   document.querySelectorAll('[data-job-filter]').forEach((button) => {

@@ -87,10 +87,10 @@ pub async fn index(State(state): State<RouterState>, headers: HeaderMap) -> Resp
     let principal = principal_from_headers(service(&state), &headers);
     let page = crate::job_list::dashboard_default_query(chrono::Utc::now())
         .apply(state.service.list_jobs(&principal));
-    let jobs_json = serde_json::to_string(&page.jobs).unwrap_or_else(|_| "[]".into());
+    let page_json = serde_json::to_string(&page).unwrap_or_else(|_| "{}".into());
     let authenticated = !matches!(principal, Principal::Anonymous);
     render(
-        assets::index_page(&jobs_json, authenticated),
+        assets::index_page(&page_json, authenticated),
         &state.service.server_info().host_name,
     )
 }
