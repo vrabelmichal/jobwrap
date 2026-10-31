@@ -44,7 +44,8 @@ Run a foreground job, or an independent user service with --detach (-d).
 List registered jobs.
 .TP
 .B show \fIJOB\fR
-Show detailed information about one job.
+Show detailed information about one job. For a detached job this includes
+the systemd user service state, worker PID, and resource usage when available.
 .TP
 .B status \fIJOB\fR
 Alias for show. Includes the final exit code or termination signal.
@@ -89,6 +90,11 @@ Inspect static executable metadata and man pages.
 .TP
 .B terminals
 List registered terminals.
+.TP
+.B prune \-\-older\-than \fIDAYS\fR [\-\-dry\-run]
+Delete finished jobs (exited, signaled, lost) that ended more than DAYS days
+ago, with their output logs and event history. Running and disconnected jobs
+are never deleted. \-\-dry\-run lists the jobs without deleting them.
 .SH EXIT STATUS
 Foreground run returns the child's exit code. Signals are reported as 128 plus
 the signal number. Detached run returns zero once registration is confirmed;
@@ -104,7 +110,8 @@ systemctl --user stop using that exact service name.
 .PP
 Services survive daemon shutdown but wrapper reconnection is not implemented:
 a restarted daemon marks their records disconnected and cannot record/control
-them. User-manager shutdown, logout policy, reboot, and explicit service stops
+them. show still reports whether the service runs, and a record whose service
+has ended becomes lost. User-manager shutdown, logout policy, reboot, and explicit service stops
 can still terminate jobs. No boot persistence or automatic restart is configured.
 .SH FILES
 .TP

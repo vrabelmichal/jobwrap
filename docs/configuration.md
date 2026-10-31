@@ -92,6 +92,10 @@ delete = "owner"
 status = "authenticated"
 output = "authenticated"
 # ... all owner for the private profile
+
+[retention]
+auto_prune = false
+prune_after_days = 90
 ```
 
 ## Exposing over TailScale
@@ -158,8 +162,23 @@ Managed and existing-terminal launch modes fail closed. The web interface
 offers a "new job" page at `/jobs/new` that uses the same launch API; when
 creation is disabled or fails closed it explains exactly which settings are
 responsible instead of showing a form. The
-`retain_completed_days` setting is reserved for future retention support;
-completed records are currently removed only with an explicit delete command.
+`retain_completed_days` setting is reserved and deletes nothing.
+
+## Retention
+
+Finished job records, their events, and their output logs are kept until
+deleted. Nothing is pruned unless the owner asks:
+
+* `jobwrap prune --older-than DAYS` deletes finished jobs (exited, signaled,
+  lost) that ended more than DAYS days ago; add `--dry-run` to list them
+  first.
+* `[retention] auto_prune = true` makes the daemon do the same once at startup
+  and then hourly for jobs older than `prune_after_days` (default 90, valid
+  1–36500). `auto_prune` defaults to `false`.
+
+Running, stopped, and disconnected jobs are never pruned. A `lost` record with
+no finish time counts from its start time. Each prune that deletes something
+is recorded in the audit table, which is not pruned.
 
 ## XDG paths
 

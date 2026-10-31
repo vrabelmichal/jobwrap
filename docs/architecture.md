@@ -78,6 +78,10 @@ foreground fallback is used when the user manager is unavailable.
 The worker and workload survive daemon shutdown, but the existing socket
 protocol does not reconnect/adopt them. A restarted daemon reports those records
 as disconnected; use the named user service to inspect or stop the workload.
+The daemon asks the user manager (`systemctl --user show`, read-only) about
+such records at startup, every 30 seconds, and when a job is shown: a running
+service is reported as alive, and an ended one settles the record as `lost`.
+An unreachable manager changes nothing.
 
 ## Process identities
 

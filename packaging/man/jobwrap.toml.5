@@ -33,6 +33,12 @@ available in this release.
 Executable and interpreter probes are disabled by default. Enabled probes are
 time/output limited but are not an operating-system sandbox.
 .TP
+.B [retention]
+\fBauto_prune\fR (default false) and \fBprune_after_days\fR (default 90).
+Only with auto_prune = true does the daemon delete finished jobs older than
+prune_after_days, at startup and hourly. \fBretain_completed_days\fR in
+[defaults] deletes nothing.
+.TP
 .B [profiles.NAME]
 Access fields: \fBstatus\fR, \fBoutput\fR, \fBcommand\fR,
 \fBworking_directory\fR, \fBsend_input\fR, \fBsignal_interrupt\fR,

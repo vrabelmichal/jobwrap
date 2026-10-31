@@ -37,10 +37,78 @@ upstream part of its Debian package version (`VERSION-REVISION`).
 |--------|-------------------------------|--------------------------------|
 | GET    | `/api/v1/server`              | version, source commit, build state, auth required, bind |
 | GET    | `/api/v1/auth`                | current session state          |
-| GET    | `/api/v1/jobs`                | job summaries visible to you   |
+| GET    | `/api/v1/jobs`                | job summaries visible to you; optional filters below |
+| GET    | `/api/v1/jobs/query`          | one filtered page with totals and per-state counts |
 | GET    | `/api/v1/jobs/{job_id}`       | non-sensitive status detail    |
+| GET    | `/api/v1/jobs/{job_id}/details` | permission-filtered command/cwd, process snapshot, detached service |
 | GET    | `/api/v1/jobs/{job_id}/output?from=N`| up to 1 MiB from byte offset N (`data_base64`) |
 | GET    | `/api/v1/jobs/{job_id}/events`| state transition history       |
+
+### Filtering and paging job lists
+
+Both list endpoints accept these query parameters:
+
+| Parameter | Meaning |
+|-----------|---------|
+| `state` | `all` (default), `active` (registering/running/stopped), `attention` (disconnected/lost), `finished` (exited/signaled) |
+| `q` | case-insensitive text over name, profile, ID, PIDs, state, and service unit |
+| `started_after`, `started_before` | start-time range |
+| `finished_after`, `finished_before` | finish-time range; excludes unfinished jobs |
+| `hide_finished_older_than_days` | hide finished jobs that ended more than N days ago; unfinished jobs are kept |
+| `offset`, `limit` | page window, newest first; `limit` is 1–1000 |
+
+Times are RFC 3339 or `YYYY-MM-DD` (a UTC day). Lower bounds are inclusive and
+upper bounds exclusive, except that a plain date as an upper bound includes
+that whole day. A `lost` record without a finish time is treated as finishing
+at its start. Invalid values return `bad_request`.
+
+`GET /api/v1/jobs` still returns a plain array and applies no limit unless one
+is given. `GET /api/v1/jobs/query` defaults to `limit=50` and returns:
+
+```json
+{
+  "jobs": [ ... ],
+  "total": 132,
+  "offset": 0,
+  "limit": 50,
+  "counts": { "all": 132, "active": 2, "attention": 1, "finished": 129 },
+  "hidden_finished": 418
+}
+```
+
+`total` counts every match before paging. `counts` applies the time and text
+filters but not `state`. `hidden_finished` counts jobs excluded only by
+`hide_finished_older_than_days`. The dashboard uses
+`hide_finished_older_than_days=7` unless a date range is chosen or older jobs
+are requested.
+
+### Detached service state
+
+For a job started with `jobwrap run -d`, summaries and details include
+`service_unit` (`jobwrap-job-JOB_ID.service`). While the job is not finished,
+`/details` also asks the systemd user manager and returns `service`:
+
+```json
+{
+  "unit": "jobwrap-job-01K1....service",
+  "available": true,
+  "load_state": "loaded",
+  "active_state": "active",
+  "sub_state": "running",
+  "main_pid": 41234,
+  "active_since": "2026-10-31T09:12:44Z",
+  "memory_bytes": 52428800,
+  "cpu_usage_nanoseconds": 1250000000,
+  "tasks": 3
+}
+```
+
+`available: false` (with `error`) means the manager could not be asked and
+says nothing about the job. Usage counters are `null` when the manager has no
+accounting for them (for example on cgroup v1). For a `disconnected` detached
+job, a running service means the workload is still alive; the process
+snapshot is then shown only when the service's main PID is the recorded
+worker and the child is still its child.
 
 ## Control endpoints
 
@@ -52,7 +120,7 @@ upstream part of its Debian package version (`VERSION-REVISION`).
 | POST   | `/api/v1/jobs/{job_id}/signals/stop`    | SIGSTOP           |
 | POST   | `/api/v1/jobs/{job_id}/signals/continue`| SIGCONT           |
 | POST   | `/api/v1/jobs/{job_id}/signals/kill`    | SIGKILL           |
-| DELETE | `/api/v1/jobs/{job_id}`                 | delete a finished record and log |
+| DELETE | `/api/v1/jobs/{job_id}`                 | delete a finished record, its events, and log |
 
 Only named signals are exposed; arbitrary numeric signals are not.
 
@@ -105,7 +173,8 @@ The same operations are available to the local user through `jobwrap`:
 
 ```text
 jobwrap list
-jobwrap show JOB_ID
+jobwrap show JOB_ID            # includes detached service state
+jobwrap prune --older-than 90 --dry-run
 jobwrap status JOB_ID
 jobwrap logs JOB_ID
 jobwrap signal JOB_ID INT

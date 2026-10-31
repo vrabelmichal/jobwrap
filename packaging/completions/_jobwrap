@@ -21,6 +21,7 @@ _jobwrap() {
         'attach-launch:Attach a launch helper'
         'inspect:Inspect executable metadata'
         'terminals:List registered terminals'
+        'prune:Delete old finished jobs'
         'help:Show help'
     )
 

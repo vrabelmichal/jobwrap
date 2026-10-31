@@ -65,7 +65,10 @@ before retrying. `--no-record` works; `--no-web` conflicts with `--detach`.
 
 Save the printed `jobwrap-job-JOB_ID.service` name. Services survive daemon
 shutdown, but the current protocol cannot reconnect/adopt wrappers: their
-records become `disconnected`, and daemon recording/control stop. Inspect with
+records become `disconnected`, and daemon recording/control stop.
+`jobwrap show JOB_ID` still asks systemd about the service: a `service:` line of
+`active (running)` means the workload is alive. When the service has ended the
+record becomes `lost` (exit status unknown). Inspect with
 `systemctl --user status jobwrap-job-JOB_ID.service` or
 `journalctl --user -u jobwrap-job-JOB_ID.service`; when termination is authorized,
 use `systemctl --user stop jobwrap-job-JOB_ID.service` for a disconnected job.
@@ -128,8 +131,11 @@ are refused even with `allow_remote_bind = true`.
 
 `jobwrap daemon restart` applies configuration changes and `daemon stop` stops
 the daemon. These affect monitoring for other jobs too; they are not commands
-for cancelling one workload. Completed records are currently removed explicitly;
-`retain_completed_days` does not implement automatic retention cleanup.
+for cancelling one workload. Finished records are kept until deleted.
+`jobwrap prune --older-than DAYS [--dry-run]` deletes finished jobs older than
+DAYS days with their logs; run it only when the user asks for cleanup, and
+dry-run first. Automatic pruning exists only when `[retention] auto_prune =
+true`; `retain_completed_days` deletes nothing.
 
 ## Authentication and scoped tokens
 

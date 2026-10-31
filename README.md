@@ -73,7 +73,9 @@ application readiness or eventual success. Use `jobwrap stop JOB_ID` to request
 termination, then check its final state.
 
 Detached services survive a jobwrap daemon restart, but wrapper reconnection
-is not implemented: those records become `disconnected`, and recording/control
+is not implemented: those records become `disconnected` (`jobwrap show` still
+reports whether the systemd service runs, and an ended service becomes
+`lost`), and recording/control
 through the restarted daemon are unavailable. Inspect the service with
 `systemctl --user status jobwrap-job-JOB_ID.service`; use
 `systemctl --user stop jobwrap-job-JOB_ID.service` to stop it if necessary.
