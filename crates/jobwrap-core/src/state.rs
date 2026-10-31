@@ -126,7 +126,8 @@ impl JobState {
 
 impl fmt::Display for JobState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label())
+        // `pad` honours width and alignment, so tables line up.
+        f.pad(self.label())
     }
 }
 

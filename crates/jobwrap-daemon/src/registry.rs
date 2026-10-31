@@ -60,6 +60,9 @@ pub struct Registry {
     pub terminals: TerminalRegistry,
     /// Help-probe previews and results.
     pub probe_store: ProbeStore,
+    /// Disconnected records without a known service that were already
+    /// checked for a detached service, so they are probed once per run.
+    probed_for_service: Mutex<std::collections::HashSet<JobId>>,
 }
 
 pub mod auth;
@@ -81,6 +84,7 @@ impl Registry {
             detached: crate::detached::DetachedStore::default(),
             terminals: TerminalRegistry::new(),
             probe_store: ProbeStore::new(),
+            probed_for_service: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -156,6 +160,10 @@ impl Registry {
                 device: register.terminal_device,
             },
             log: Default::default(),
+            service_unit: self
+                .detached
+                .take_claim(id)
+                .then(|| jobwrap_core::detached_service_unit(id)),
         };
 
         let mut jobs = self.jobs.lock().expect("jobs lock");
@@ -705,6 +713,136 @@ impl Registry {
         Ok(())
     }
 
+    // ---- detached services ----
+
+    /// The service to ask about for a disconnected record, and whether the
+    /// record already knows it is detached.
+    ///
+    /// Records from before service tracking, or whose registration predates
+    /// a daemon upgrade, are probed once under the deterministic unit name.
+    fn service_candidate(&self, record: &JobRecord, force: bool) -> Option<(String, bool)> {
+        if let Some(unit) = &record.service_unit {
+            return Some((unit.clone(), true));
+        }
+        if record.state != JobState::Disconnected {
+            return None;
+        }
+        let first_probe = self
+            .probed_for_service
+            .lock()
+            .expect("probe set lock")
+            .insert(record.id);
+        (force || first_probe).then(|| (jobwrap_core::detached_service_unit(record.id), false))
+    }
+
+    /// Ask systemd about a job's detached service. `Ok(None)` for jobs that
+    /// are not detached. Blocks on a short `systemctl` query.
+    pub fn detached_service_status(
+        &self,
+        principal: &Principal,
+        job_id: JobId,
+    ) -> Result<Option<jobwrap_protocol::ServiceUnitStatus>, jobwrap_web::ApiError> {
+        let record = self.get_job(principal, job_id)?;
+        // A finished record keeps its unit name; the collected service has
+        // nothing more to say.
+        if record.state.is_finished() {
+            return Ok(None);
+        }
+        let Some((unit, known)) = self.service_candidate(&record, true) else {
+            return Ok(None);
+        };
+        let status = crate::service_unit::query(&unit);
+        self.apply_service_status(job_id, &status, known);
+        let detached = known || status.is_running();
+        Ok(detached.then_some(status))
+    }
+
+    /// Settle disconnected detached jobs against the service manager.
+    pub fn reconcile_detached_services(&self) {
+        let candidates: Vec<(JobId, String, bool)> = {
+            let jobs = self.jobs.lock().expect("jobs lock");
+            jobs.values()
+                .filter(|job| job.record.state == JobState::Disconnected)
+                .filter_map(|job| {
+                    self.service_candidate(&job.record, false)
+                        .map(|(unit, known)| (job.record.id, unit, known))
+                })
+                .collect()
+        };
+        for (job_id, unit, known) in candidates {
+            let status = crate::service_unit::query(&unit);
+            self.apply_service_status(job_id, &status, known);
+        }
+    }
+
+    /// Record what the service manager said about a disconnected job.
+    ///
+    /// A running service under the job's own name identifies an older
+    /// detached record. A known detached service that has ended means the
+    /// workload is gone while nobody was connected: the job becomes `lost`
+    /// because its exit status cannot be recovered. An unreachable manager
+    /// changes nothing.
+    fn apply_service_status(
+        &self,
+        job_id: JobId,
+        status: &jobwrap_protocol::ServiceUnitStatus,
+        known: bool,
+    ) {
+        let mut jobs = self.jobs.lock().expect("jobs lock");
+        let Some(job) = jobs.get_mut(&job_id) else {
+            return;
+        };
+        if job.record.state != JobState::Disconnected {
+            return;
+        }
+        let store = self.store.lock().expect("store lock");
+        if !known {
+            if !status.is_running() {
+                return;
+            }
+            job.record.service_unit = Some(status.unit.clone());
+            if let Err(error) = store.update_job(&job.record) {
+                tracing::error!(%job_id, %error, "persisting detached service failed");
+            }
+            let detail = format!(
+                "Found the running detached service {} for this record.",
+                status.unit
+            );
+            let _ =
+                store.insert_event(&Event::new(job_id, EventId(0), EventKind::Audit { detail }));
+            return;
+        }
+        if !status.has_ended() {
+            return;
+        }
+        let Ok(state) = job.record.state.transition(JobState::Lost) else {
+            return;
+        };
+        job.record.state = state;
+        // The end happened at some point before now; now is the only bound.
+        job.record.finished_at = Some(Utc::now());
+        if let Err(error) = store.update_job(&job.record) {
+            tracing::error!(%job_id, %error, "persisting ended detached service failed");
+        }
+        let detail = format!(
+            "The detached service {} is no longer running ({}). The daemon was not connected when the workload ended, so its exit status is unknown; the finish time is when this was noticed.",
+            status.unit,
+            status.describe()
+        );
+        for kind in [
+            EventKind::Audit { detail },
+            EventKind::StateChanged { state },
+        ] {
+            if let Err(error) = store.insert_event(&Event::new(job_id, EventId(0), kind)) {
+                tracing::error!(%job_id, %error, "persisting detached service event failed");
+            }
+        }
+        tracing::info!(%job_id, unit = %status.unit, "detached service ended while disconnected");
+        let _ = self
+            .broadcast_tx
+            .send(jobwrap_web::ServerEvent::StateChanged { job_id, state });
+    }
+
     // ---- queries ----
 
     pub fn list_jobs(&self, principal: &Principal) -> Vec<JobSummary> {
@@ -936,5 +1074,6 @@ pub fn summary_for(record: &JobRecord) -> JobSummary {
         output_bytes: record.log.bytes_written,
         log_truncated: record.log.truncated,
         visibility,
+        service_unit: record.service_unit.clone(),
     }
 }

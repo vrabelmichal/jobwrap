@@ -266,7 +266,10 @@ fn handle_cli_message(
             err(Code::BadRequest, "detached launch requires async handling")
         }
         ClientToDaemon::ClaimDetached { job_id } => match registry.detached.take(job_id) {
-            Some(request) => DaemonToClient::DetachedLaunch { job_id, request },
+            Some(request) => {
+                registry.detached.mark_claimed(job_id);
+                DaemonToClient::DetachedLaunch { job_id, request }
+            }
             None => err(
                 Code::NotFound,
                 "detached request expired or was already claimed",
@@ -278,11 +281,28 @@ fn handle_cli_message(
             DaemonToClient::JobList { jobs }
         }
         ClientToDaemon::ShowJob { job_id } => match registry.get_job(owner, job_id) {
-            Ok(record) => {
-                let summary = crate::registry::summary_for(&record);
-                DaemonToClient::JobDetail { job: Some(summary) }
+            Ok(_) => {
+                // The service query may also settle the record's state, so
+                // read the record again afterwards.
+                let service = registry
+                    .detached_service_status(owner, job_id)
+                    .ok()
+                    .flatten();
+                match registry.get_job(owner, job_id) {
+                    Ok(record) => DaemonToClient::JobDetail {
+                        job: Some(crate::registry::summary_for(&record)),
+                        service,
+                    },
+                    Err(_) => DaemonToClient::JobDetail {
+                        job: None,
+                        service: None,
+                    },
+                }
             }
-            Err(_) => DaemonToClient::JobDetail { job: None },
+            Err(_) => DaemonToClient::JobDetail {
+                job: None,
+                service: None,
+            },
         },
         ClientToDaemon::GetOutput {
             job_id,

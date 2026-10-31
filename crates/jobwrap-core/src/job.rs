@@ -123,6 +123,15 @@ pub struct JobRecord {
     pub finished_at: Option<DateTime<Utc>>,
     pub terminal: TerminalMetadata,
     pub log: LogMetadata,
+    /// The systemd user service of a detached job (`jobwrap run -d`).
+    /// Absent for foreground jobs and for records written before 0.3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_unit: Option<String>,
+}
+
+/// The transient user service name `jobwrap run -d` uses for a job.
+pub fn detached_service_unit(id: crate::JobId) -> String {
+    format!("jobwrap-job-{id}.service")
 }
 
 impl JobRecord {

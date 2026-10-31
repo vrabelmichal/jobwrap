@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use jobwrap_core::{
     authorize, AuthorizationDecision, JobId, JobRecord, JobState, Permission, Principal,
 };
+use jobwrap_protocol::ServiceUnitStatus;
 
 use crate::error::ApiError;
 use crate::router::RouterState;
@@ -48,11 +49,29 @@ pub(crate) async fn get_job_details(
 ) -> Result<Json<Value>, ApiError> {
     let id = parse_job_id(&id)?;
     let principal = principal_from_headers(&state, &headers);
+    state.service.get_job(&principal, id)?;
+    // The service query runs `systemctl` and may settle the record's state,
+    // so it runs off the async workers and before the record is read.
+    let service = {
+        let service = state.service.clone();
+        let principal = principal.clone();
+        tokio::task::spawn_blocking(move || service.service_status(&principal, id))
+            .await
+            .map_err(|error| ApiError::internal(format!("service status task failed: {error}")))??
+    };
     let record = state.service.get_job(&principal, id)?;
-    Ok(Json(details_response(&record, &principal)))
+    Ok(Json(details_response(
+        &record,
+        &principal,
+        service.as_ref(),
+    )))
 }
 
-fn details_response(record: &JobRecord, principal: &Principal) -> Value {
+fn details_response(
+    record: &JobRecord,
+    principal: &Principal,
+    service: Option<&ServiceUnitStatus>,
+) -> Value {
     let view_output = allowed(principal, record, Permission::ViewOutput);
     let view_command = allowed(principal, record, Permission::ViewCommand);
     let view_working_directory = allowed(principal, record, Permission::ViewWorkingDirectory);
@@ -62,7 +81,7 @@ fn details_response(record: &JobRecord, principal: &Principal) -> Value {
     let arguments = view_command.then(|| record.arguments.clone());
     let working_directory =
         view_working_directory.then(|| record.working_directory.to_string_lossy().into_owned());
-    let process = process_snapshot(record, view_command, view_working_directory);
+    let process = process_snapshot(record, service, view_command, view_working_directory);
 
     json!({
         "id": record.id.to_string(),
@@ -89,6 +108,8 @@ fn details_response(record: &JobRecord, principal: &Principal) -> Value {
             "truncated": record.log.truncated,
         },
         "process": process,
+        "service_unit": record.service_unit,
+        "service": service,
         "permissions": {
             "view_output": view_output,
             "view_command": view_command,
@@ -109,20 +130,52 @@ fn allowed(principal: &Principal, record: &JobRecord, permission: Permission) ->
     )
 }
 
+/// Whether stored PIDs still name this job's processes.
+///
+/// Stored PIDs must not be trusted after the wrapper loses authoritative
+/// contact with the job: Linux can reuse a PID for an unrelated process. A
+/// disconnected detached job is the exception when systemd vouches for the
+/// worker (the service's main PID is the recorded wrapper) and the child is
+/// still that worker's child.
+fn pids_are_current(
+    record: &JobRecord,
+    service: Option<&ServiceUnitStatus>,
+    child_status: &str,
+) -> bool {
+    match record.state {
+        JobState::Running | JobState::Stopped => true,
+        JobState::Disconnected => {
+            let Some(service) = service.filter(|service| service.is_running()) else {
+                return false;
+            };
+            let wrapper = record.wrapper_pid.map(|pid| pid.0);
+            wrapper.is_some()
+                && service.main_pid == wrapper
+                && status_field(child_status, "PPid").and_then(parse_i32) == wrapper
+        }
+        _ => false,
+    }
+}
+
 fn process_snapshot(
     record: &JobRecord,
+    service: Option<&ServiceUnitStatus>,
     include_command: bool,
     include_working_directory: bool,
 ) -> Option<ProcessSnapshot> {
-    // Stored PIDs must not be trusted after the wrapper loses authoritative
-    // contact with the job: Linux can reuse a PID for an unrelated process.
-    if !matches!(&record.state, JobState::Running | JobState::Stopped) {
+    if !matches!(
+        &record.state,
+        JobState::Running | JobState::Stopped | JobState::Disconnected
+    ) {
         return None;
     }
 
     let pid = record.child_pid?.0;
     let base = format!("/proc/{pid}");
     let status = fs::read_to_string(format!("{base}/status")).ok()?;
+    if !pids_are_current(record, service, &status) {
+        return None;
+    }
     let io_text = fs::read_to_string(format!("{base}/io")).ok();
 
     let open_file_descriptors = fs::read_dir(format!("{base}/fd"))

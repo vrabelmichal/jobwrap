@@ -53,6 +53,14 @@ impl JobService for DaemonService {
         self.registry.get_job(principal, id)
     }
 
+    fn service_status(
+        &self,
+        principal: &Principal,
+        id: JobId,
+    ) -> Result<Option<jobwrap_protocol::ServiceUnitStatus>, ApiError> {
+        self.registry.detached_service_status(principal, id)
+    }
+
     fn authorize_output(&self, principal: &Principal, id: JobId) -> Result<(), ApiError> {
         self.registry.authorize_output(principal, id)
     }

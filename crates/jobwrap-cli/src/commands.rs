@@ -122,7 +122,10 @@ fn show(job: &str) -> anyhow::Result<()> {
     let job_id = parse_job_id(job)?;
     with_client(
         |client| match client.request(ClientToDaemon::ShowJob { job_id })? {
-            DaemonToClient::JobDetail { job: Some(job) } => {
+            DaemonToClient::JobDetail {
+                job: Some(job),
+                service,
+            } => {
                 println!("job id:             {}", job.id);
                 println!("name:               {}", job.display_name);
                 println!("state:              {}", job.state.describe());
@@ -135,18 +138,69 @@ fn show(job: &str) -> anyhow::Result<()> {
                 println!(
                     "terminal:           {}",
                     if job.terminal.attached {
-                        "attached"
+                        "attached at launch"
                     } else {
-                        "detached"
+                        "not attached at launch"
                     }
                 );
+                if let Some(unit) = job
+                    .service_unit
+                    .as_deref()
+                    .or(service.as_ref().map(|service| service.unit.as_str()))
+                {
+                    println!("launch:             detached (systemd user service {unit})");
+                }
+                if let Some(service) = &service {
+                    print_service(&job, service);
+                }
                 Ok(())
             }
-            DaemonToClient::JobDetail { job: None } => bail!("job {job_id} not found"),
+            DaemonToClient::JobDetail { job: None, .. } => bail!("job {job_id} not found"),
             DaemonToClient::Error { message, .. } => bail!("{message}"),
             other => bail!("unexpected daemon response: {:?}", tag(&other)),
         },
     )
+}
+
+fn print_service(
+    job: &jobwrap_protocol::JobSummary,
+    service: &jobwrap_protocol::ServiceUnitStatus,
+) {
+    let mut line = service.describe();
+    if let Some(since) = service.active_since {
+        line.push_str(&format!(" since {}", since.to_rfc3339()));
+    }
+    println!("service:            {line}");
+    if let Some(pid) = service.main_pid {
+        println!("service main pid:   {pid} (jobwrap worker)");
+    }
+    let mut usage = Vec::new();
+    if let Some(bytes) = service.memory_bytes {
+        usage.push(format!(
+            "memory {:.1} MiB",
+            bytes as f64 / (1024.0 * 1024.0)
+        ));
+    }
+    if let Some(nanoseconds) = service.cpu_usage_nanoseconds {
+        usage.push(format!("cpu {:.2} s", nanoseconds as f64 / 1e9));
+    }
+    if let Some(tasks) = service.tasks {
+        usage.push(format!("tasks {tasks}"));
+    }
+    if !usage.is_empty() {
+        println!("service usage:      {}", usage.join(", "));
+    }
+    let unit = &service.unit;
+    if job.state == jobwrap_core::JobState::Disconnected && service.is_running() {
+        println!();
+        println!("The daemon lost contact with this detached job, but its service is still");
+        println!("running. Live output and control through jobwrap are unavailable; use");
+        println!("  systemctl --user status {unit}");
+        println!("  journalctl --user -u {unit}");
+        println!("  systemctl --user stop {unit}");
+    } else if !service.available {
+        println!("hint:               check `systemctl --user status {unit}`");
+    }
 }
 
 fn logs(job: &str, offset: u64) -> anyhow::Result<()> {

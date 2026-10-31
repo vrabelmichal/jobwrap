@@ -72,6 +72,16 @@ pub trait JobService: Send + Sync {
     /// that require stronger permissions than status access.
     fn get_job(&self, principal: &Principal, id: JobId) -> Result<JobRecord, ApiError>;
 
+    /// Live systemd state of a detached job's service; `None` for other jobs.
+    /// May block briefly; callers on the async runtime should offload it.
+    fn service_status(
+        &self,
+        _principal: &Principal,
+        _id: JobId,
+    ) -> Result<Option<jobwrap_protocol::ServiceUnitStatus>, ApiError> {
+        Ok(None)
+    }
+
     /// Authorize a live output subscription without reading the output log.
     ///
     /// The default implementation checks through the output API. Services with

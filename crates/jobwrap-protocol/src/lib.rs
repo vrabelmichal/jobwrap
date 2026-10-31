@@ -24,7 +24,7 @@ pub use query::{JobPage, JobQuery, StateCounts, StateGroup};
 pub use types::{
     ApiErrorCode, DaemonError, HelpProbeKind, HelpProbeRequest, HelpProbeResult, JobSummary,
     ManPage, ManPageMatch, OutputRange, OutputSlice, ProbeClassification, ProbeInvocation,
-    ProbePreview, SandboxStatus, TargetInfo, TerminalInfo, TokenInfo,
+    ProbePreview, SandboxStatus, ServiceUnitStatus, TargetInfo, TerminalInfo, TokenInfo,
 };
 
 mod error;

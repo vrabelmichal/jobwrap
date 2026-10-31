@@ -174,6 +174,7 @@ pub fn job_page(record: &JobRecord) -> String {
 </header>
 <main id="job-details" class="job-main" data-job="{}">
   <p id="wrapper-status-note" class="muted" hidden>The wrapper connection is lost. The workload may still be running; its exit status is unknown. Live output and control are unavailable. Check the workload's own log before considering a restart.</p>
+  <p id="detached-running-note" class="muted" hidden>The daemon lost contact with this detached job, but its systemd user service is still running. Live output and control through jobwrap are unavailable; use the service commands below to inspect or stop it.</p>
   <div class="details-layout">
     <section class="card overview-card">
       <div class="section-heading">
@@ -218,6 +219,28 @@ pub fn job_page(record: &JobRecord) -> String {
         <div><span class="field-label">Current executable</span><code id="process-executable">—</code></div>
         <div><span class="field-label">Current working directory</span><code id="process-cwd">—</code></div>
         <div><span class="field-label">Current argv</span><code id="process-command" class="wrap-code">—</code></div>
+      </div>
+    </section>
+
+    <section id="service-card" class="card service-card full-width" hidden>
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">detached job</span>
+          <h2>systemd user service</h2>
+        </div>
+        <span id="service-state" class="status-pill neutral">—</span>
+      </div>
+      <dl class="detail-grid compact-grid">
+        <div><dt>Unit</dt><dd><code id="service-unit">—</code></dd></div>
+        <div><dt>Active since</dt><dd id="service-since">—</dd></div>
+        <div><dt>Main PID (worker)</dt><dd id="service-main-pid">—</dd></div>
+        <div><dt>Memory</dt><dd id="service-memory">—</dd></div>
+        <div><dt>CPU time</dt><dd id="service-cpu">—</dd></div>
+        <div><dt>Tasks</dt><dd id="service-tasks">—</dd></div>
+      </dl>
+      <div class="process-paths">
+        <div><span class="field-label">Inspect</span><code id="service-status-command">—</code></div>
+        <div><span class="field-label">Worker log</span><code id="service-journal-command">—</code></div>
       </div>
     </section>
 

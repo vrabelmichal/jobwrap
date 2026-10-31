@@ -326,7 +326,7 @@ function renderJobList() {
       `<td data-label="State"><span class="status-pill ${stateTone(job.state)}">${escapeHtml(formatState(job.state))}</span>` +
         `<span class="row-subtitle">${visibility}</span></td>` +
       `<td data-label="Process"><span class="row-value">PID ${escapeHtml(pid)}</span>` +
-        `<span class="row-subtitle">${terminal.attached ? 'terminal attached' : 'no terminal at launch'}</span></td>` +
+        `<span class="row-subtitle">${job.service_unit ? 'detached service' : (terminal.attached ? 'terminal attached' : 'no terminal at launch')}</span></td>` +
       `<td data-label="Started"><span class="row-value">${escapeHtml(formatDate(job.started_at))}</span>${finished}</td>` +
       `<td data-label="Runtime"><span class="row-value tabular">${escapeHtml(formatDuration(job.started_at, job.finished_at))}</span></td>` +
       `<td data-label="Output"><span class="row-value tabular">${escapeHtml(output)}</span>${truncated}</td>` +
@@ -594,14 +594,62 @@ function renderProcess(process, permissions) {
   );
 }
 
+function serviceIsRunning(service) {
+  return Boolean(service && service.available && service.load_state === 'loaded' &&
+    ['active', 'activating', 'deactivating', 'reloading'].includes(service.active_state));
+}
+
+function describeService(service) {
+  if (!service.available) return 'unavailable';
+  if (service.load_state === 'not-found') return 'ended';
+  const sub = service.sub_state ? ` (${service.sub_state})` : '';
+  return `${service.active_state || 'unknown'}${sub}`;
+}
+
+function renderService(data) {
+  const card = document.getElementById('service-card');
+  const unit = data.service_unit || (data.service && data.service.unit);
+  if (card) card.hidden = !unit;
+  if (!unit) return;
+  const service = data.service;
+  setText('service-unit', unit);
+  setText('service-status-command', `systemctl --user status ${unit}`);
+  setText('service-journal-command', `journalctl --user -u ${unit}`);
+  const stateNode = document.getElementById('service-state');
+  if (stateNode) {
+    if (!service) {
+      stateNode.textContent = stateGroup(data.state) === 'active' ? 'connected' : 'ended';
+      stateNode.className = 'status-pill neutral';
+    } else {
+      stateNode.textContent = describeService(service);
+      stateNode.className = `status-pill ${serviceIsRunning(service) ? 'success' : service.available ? 'neutral' : 'warning'}`;
+      stateNode.title = service.error || '';
+    }
+  }
+  setText('service-since', service && service.active_since ? formatDate(service.active_since) : null);
+  setText('service-main-pid', service ? service.main_pid : null);
+  setText('service-memory', service && service.memory_bytes !== null && service.memory_bytes !== undefined ? formatBytes(service.memory_bytes) : null);
+  setText('service-cpu', service && service.cpu_usage_nanoseconds !== null && service.cpu_usage_nanoseconds !== undefined
+    ? `${(service.cpu_usage_nanoseconds / 1e9).toFixed(2)} s` : null);
+  setText('service-tasks', service ? service.tasks : null);
+}
+
 function renderJobDetails(data) {
   setText('job-id', data.id);
   setText('job-profile', data.profile);
   setText('job-started', formatDate(data.started_at));
   const uncertain = ['disconnected', 'lost'].includes(stateType(data.state));
-  setText('job-finished', data.finished_at ? formatDate(data.finished_at) : (uncertain ? 'unknown' : 'not finished'));
+  const finished = stateType(data.state) === 'lost' && data.finished_at
+    ? `by ${formatDate(data.finished_at)} (exact time unknown)`
+    : (data.finished_at ? formatDate(data.finished_at) : (uncertain ? 'unknown' : 'not finished'));
+  setText('job-finished', finished);
+  // A running detached service answers the question the generic note asks.
+  const detachedRunning = stateType(data.state) === 'disconnected' && serviceIsRunning(data.service);
   const wrapperNote = document.getElementById('wrapper-status-note');
-  if (wrapperNote) wrapperNote.hidden = !uncertain;
+  if (wrapperNote) wrapperNote.hidden = !uncertain || detachedRunning;
+  const detachedNote = document.getElementById('detached-running-note');
+  if (detachedNote) detachedNote.hidden = !detachedRunning;
+  renderService(data);
   setText('job-runtime', formatDuration(data.started_at, data.finished_at));
   setText('job-child-pid', data.child_pid);
   setText('job-wrapper-pid', data.wrapper_pid);

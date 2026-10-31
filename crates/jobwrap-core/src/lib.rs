@@ -30,7 +30,7 @@ pub use access::{
 };
 pub use error::CoreError;
 pub use event::{Event, EventId, EventKind};
-pub use job::{CommandDisplay, JobName, JobRecord};
+pub use job::{detached_service_unit, CommandDisplay, JobName, JobRecord};
 pub use job_id::{JobId, JobIdError, ULID_EPOCH};
 pub use launch::{LaunchMode, TerminalTarget};
 pub use process::{ProcessGroupId, ProcessId, SessionId, TerminalMetadata, WindowSize};

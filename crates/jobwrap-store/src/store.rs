@@ -506,6 +506,7 @@ mod tests {
             finished_at: None,
             terminal: Default::default(),
             log: Default::default(),
+            service_unit: None,
         }
     }
 

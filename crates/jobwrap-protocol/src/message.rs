@@ -251,6 +251,9 @@ pub enum DaemonToClient {
     },
     JobDetail {
         job: Option<JobSummary>,
+        /// Live systemd state for a detached job; absent from older daemons.
+        #[serde(default)]
+        service: Option<super::types::ServiceUnitStatus>,
     },
     DetachedStarted {
         job_id: JobId,

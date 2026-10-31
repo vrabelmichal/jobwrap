@@ -26,6 +26,87 @@ pub struct JobSummary {
     pub output_bytes: u64,
     pub log_truncated: bool,
     pub visibility: String,
+    /// The systemd user service of a detached job.
+    #[serde(default)]
+    pub service_unit: Option<String>,
+}
+
+/// What the systemd user manager reports about a detached job's service.
+///
+/// `available = false` means the manager could not be asked; nothing about
+/// the job may be concluded from that.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceUnitStatus {
+    pub unit: String,
+    pub available: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    /// `loaded` or `not-found` (a collected, finished transient unit).
+    #[serde(default)]
+    pub load_state: Option<String>,
+    /// `active`, `activating`, `deactivating`, `inactive`, or `failed`.
+    #[serde(default)]
+    pub active_state: Option<String>,
+    #[serde(default)]
+    pub sub_state: Option<String>,
+    #[serde(default)]
+    pub result: Option<String>,
+    /// The service's main process: the jobwrap worker of a detached job.
+    #[serde(default)]
+    pub main_pid: Option<i32>,
+    #[serde(default)]
+    pub active_since: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub memory_bytes: Option<u64>,
+    #[serde(default)]
+    pub cpu_usage_nanoseconds: Option<u64>,
+    #[serde(default)]
+    pub tasks: Option<u64>,
+}
+
+impl ServiceUnitStatus {
+    /// The manager answered and the service is running or starting/stopping.
+    pub fn is_running(&self) -> bool {
+        self.available
+            && self.load_state.as_deref() == Some("loaded")
+            && matches!(
+                self.active_state.as_deref(),
+                Some("active" | "activating" | "deactivating" | "reloading")
+            )
+    }
+
+    /// The manager answered and the service no longer runs anything.
+    pub fn has_ended(&self) -> bool {
+        self.available
+            && (self.load_state.as_deref() == Some("not-found")
+                || matches!(self.active_state.as_deref(), Some("inactive" | "failed")))
+    }
+
+    /// One line for humans, e.g. `active (running)`.
+    pub fn describe(&self) -> String {
+        if !self.available {
+            return format!(
+                "unavailable ({})",
+                self.error
+                    .as_deref()
+                    .unwrap_or("systemd user manager not reachable")
+            );
+        }
+        if self.load_state.as_deref() == Some("not-found") {
+            return "not found (the service has ended and was collected)".to_string();
+        }
+        let mut text = self
+            .active_state
+            .clone()
+            .unwrap_or_else(|| "unknown".into());
+        if let Some(sub) = &self.sub_state {
+            text.push_str(&format!(" ({sub})"));
+        }
+        if let Some(result) = self.result.as_deref().filter(|r| *r != "success") {
+            text.push_str(&format!(", result {result}"));
+        }
+        text
+    }
 }
 
 /// A slice of a job's recorded output log.

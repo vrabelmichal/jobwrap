@@ -140,6 +140,10 @@ fn matches_text(job: &JobSummary, needle: &str) -> bool {
         haystack.push(' ');
         haystack.push_str(&pid.to_string());
     }
+    if let Some(unit) = &job.service_unit {
+        haystack.push(' ');
+        haystack.push_str(unit);
+    }
     haystack.push(' ');
     haystack.push_str(&job.visibility);
     haystack.to_lowercase().contains(needle)
@@ -282,6 +286,7 @@ mod tests {
             output_bytes: 0,
             log_truncated: false,
             visibility: "public".to_string(),
+            service_unit: None,
         }
     }
 

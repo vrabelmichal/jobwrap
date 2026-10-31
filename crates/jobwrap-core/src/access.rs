@@ -456,6 +456,7 @@ mod tests {
             finished_at: None,
             terminal: crate::process::TerminalMetadata::default(),
             log: crate::job::LogMetadata::default(),
+            service_unit: None,
         }
     }
 

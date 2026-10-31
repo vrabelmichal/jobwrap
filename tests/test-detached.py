@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -59,7 +60,7 @@ def main():
         return subprocess.run([str(CLI)] + list(args), env=env, cwd=str(work), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, **kwargs)
 
     def launch(*command, **options):
-        args = ["run", "-d", "--profile", "private", "--name", options.get("name", "detached-test")]
+        args = ["run", "-d", "--profile", options.get("profile", "private"), "--name", options.get("name", "detached-test")]
         if options.get("no_record"):
             args.append("--no-record")
         result = cli(*(args + ["--"] + list(command)))
@@ -133,24 +134,81 @@ while True: time.sleep(1)
             assert cli(*args).returncode == 2, "implicit command launch must be rejected"
         assert cli("list").stdout == before, "invalid requests started a workload"
 
+        def details(job_id):
+            url = "http://127.0.0.1:{}/api/v1/jobs/{}/details".format(daemon_port, job_id)
+            with urllib.request.urlopen(url, timeout=10) as response:
+                return json.loads(response.read())
+
+        def start_daemon(run_env):
+            started = subprocess.Popen([str(DAEMON), "--foreground"], env=run_env, cwd=str(work), stdout=daemon_log, stderr=subprocess.STDOUT)
+            wait_for(lambda: cli("daemon", "status").returncode == 0 and (work / "runtime/jobwrap/daemon.sock").exists(), "test daemon restart")
+            return started
+
+        # A public detached job: systemd reports on its service while connected.
+        watched = launch(sys.executable, "-c", 'import os, pathlib, time; pathlib.Path("watched.pid").write_text(str(os.getpid())); time.sleep(120)', profile="standard", name="watched")
+        wait_for(lambda: (work / "watched.pid").exists(), "watched startup")
+        watched_pid = int((work / "watched.pid").read_text())
+        unit = "jobwrap-job-{}.service".format(watched)
+        shown = cli("show", watched).stdout
+        assert b"launch:             detached (systemd user service " + unit.encode() in shown, shown
+        assert b"service:            active (running)" in shown, shown
+        assert re.search(rb"service main pid:   [0-9]+ \(jobwrap worker\)", shown), shown
+        # Usage needs delegated cgroup v2 controllers; cgroup v1 hosts omit it.
+        data = details(watched)
+        assert data["service_unit"] == unit and data["service"]["active_state"] == "active", data
+        assert data["process"]["pid"] == watched_pid, data
+        listed = json.loads(urllib.request.urlopen("http://127.0.0.1:{}/api/v1/jobs?q={}".format(daemon_port, unit), timeout=10).read())
+        assert [job["id"] for job in listed] == [watched], listed
+
         survivor = launch(sys.executable, "-c", 'import os, pathlib, time; pathlib.Path("survivor.pid").write_text(str(os.getpid())); time.sleep(120)')
         wait_for(lambda: (work / "survivor.pid").exists(), "survivor startup")
         survivor_pid = int((work / "survivor.pid").read_text())
         daemon.terminate()
         daemon.wait(timeout=5)
         os.kill(survivor_pid, 0)
+        os.kill(watched_pid, 0)
+
+        # Simulate a record written before service tracking existed.
+        db = sqlite3.connect(str(work / "state/jobwrap/jobwrap.db"))
+        record = json.loads(db.execute("SELECT record_json FROM jobs WHERE id = ?", (watched,)).fetchone()[0])
+        assert record.pop("service_unit") == unit
+        db.execute("UPDATE jobs SET record_json = ? WHERE id = ?", (json.dumps(record), watched))
+        db.commit()
+        db.close()
+
+        # After a restart the workers cannot reconnect, but systemd still
+        # vouches for them: the service is found again by its unit name and
+        # the process snapshot is trusted because the worker is the service's
+        # main process.
+        daemon = start_daemon(env)
+        shown = cli("show", watched).stdout
+        assert b"disconnected" in shown and b"service:            active (running)" in shown, shown
+        assert b"systemctl --user stop " + unit.encode() in shown, shown
+        data = details(watched)
+        assert data["state"]["type"] == "disconnected" and data["service_unit"] == unit, data
+        assert data["process"]["pid"] == watched_pid, data
+        subprocess.run(["systemctl", "--user", "stop", unit], check=True)
+        wait_for(lambda: b"state:              lost" in cli("show", watched).stdout, "ended detached service was not settled")
+        events = json.loads(urllib.request.urlopen("http://127.0.0.1:{}/api/v1/jobs/{}/events".format(daemon_port, watched), timeout=10).read())
+        assert any("is no longer running" in json.dumps(event["kind"]) for event in events), events
+        assert b"finished:" in cli("show", watched).stdout
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        os.kill(survivor_pid, 0)
         # A monitoring daemon restart must not terminate a detached service.
         # Reconnection/adoption is outside the current monitoring protocol.
         broken_bus_env = dict(env, DBUS_SESSION_BUS_ADDRESS="unix:path=" + str(work / "missing-bus"))
-        daemon = subprocess.Popen([str(DAEMON), "--foreground"], env=broken_bus_env, cwd=str(work), stdout=daemon_log, stderr=subprocess.STDOUT)
-        wait_for(lambda: (work / "runtime/jobwrap/daemon.sock").exists(), "test daemon restart")
-        assert b"disconnected" in cli("show", survivor).stdout
+        daemon = start_daemon(broken_bus_env)
+        shown = cli("show", survivor).stdout
+        # An unreachable manager proves nothing: the record stays disconnected.
+        assert b"disconnected" in shown and b"service:            unavailable" in shown, shown
         before = cli("list").stdout
         unavailable = cli("run", "-d", "--", sys.executable, "-c", 'raise SystemExit(0)')
         assert unavailable.returncode != 0 and b"working systemd user manager" in unavailable.stderr, unavailable.stderr
         assert cli("list").stdout == before, "unavailable manager started a workload"
         print("PASS: detached HTTP server survived agent cgroup SIGKILL; argv/environment/cwd, logs, signals, exit status, no-record, status alias, and invalid requests verified")
         print("PASS: detached workload survived daemon shutdown; missing manager failed without launching a fallback")
+        print("PASS: service state, usage, and process snapshot reported across a daemon restart; older records adopted; an ended service settled as lost")
         print("Artifacts: " + str(work))
     finally:
         for job_id in job_ids:

@@ -18,6 +18,9 @@ const CLAIM_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Default)]
 pub struct DetachedStore {
     pending: Mutex<HashMap<JobId, (Instant, DetachedRequest)>>,
+    /// Claimed launches whose worker has not registered yet. Registration
+    /// consults this so only daemon-started services are recorded as such.
+    claimed: Mutex<HashMap<JobId, Instant>>,
 }
 
 impl DetachedStore {
@@ -38,6 +41,22 @@ impl DetachedStore {
             .remove(&id)
             .filter(|(at, _)| at.elapsed() < CLAIM_TIMEOUT)
             .map(|(_, request)| request)
+    }
+
+    /// Record that the worker of `id` claimed its launch request.
+    pub fn mark_claimed(&self, id: JobId) {
+        let mut claimed = self.claimed.lock().expect("detached claimed lock");
+        claimed.retain(|_, at| at.elapsed() < CLAIM_TIMEOUT);
+        claimed.insert(id, Instant::now());
+    }
+
+    /// Whether `id` is a claimed detached launch; consumes the claim.
+    pub fn take_claim(&self, id: JobId) -> bool {
+        self.claimed
+            .lock()
+            .expect("detached claimed lock")
+            .remove(&id)
+            .is_some_and(|at| at.elapsed() < CLAIM_TIMEOUT)
     }
 }
 
@@ -63,12 +82,17 @@ pub async fn launch(
     let job_id = JobId::generate().map_err(|e| e.to_string())?;
     registry.detached.insert(job_id, request)?;
 
-    let unit = format!("jobwrap-job-{job_id}.service");
+    let unit = jobwrap_core::detached_service_unit(job_id);
     let mut command = tokio::process::Command::new("systemd-run");
     command
         .args(["--user", "--quiet", "--collect", "--service-type=exec"])
         .arg(format!("--unit={unit}"))
         .args([
+            // Accounting lets `jobwrap show` and the web page report the
+            // service's memory, CPU time, and task count.
+            "--property=MemoryAccounting=yes",
+            "--property=CPUAccounting=yes",
+            "--property=TasksAccounting=yes",
             "--property=StandardInput=null",
             "--property=StandardOutput=null",
             "--property=StandardError=journal",
