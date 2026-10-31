@@ -121,8 +121,16 @@ worker and the child is still its child.
 | POST   | `/api/v1/jobs/{job_id}/signals/continue`| SIGCONT           |
 | POST   | `/api/v1/jobs/{job_id}/signals/kill`    | SIGKILL           |
 | DELETE | `/api/v1/jobs/{job_id}`                 | delete a finished record, its events, and log |
+| POST   | `/api/v1/jobs/prune`                    | body `{older_than_days, dry_run}`; see below |
 
 Only named signals are exposed; arbitrary numeric signals are not.
+
+`POST /api/v1/jobs/prune` deletes finished jobs (exited, signaled, lost) that
+ended more than `older_than_days` (at least 1) days ago, with their logs and
+events; `"dry_run": true` only lists them. It returns
+`{jobs, dry_run, freed_log_bytes}`. It requires `[retention] allow_web_prune =
+true` and a browser login session; API tokens and anonymous requests get
+`permission_denied`. Cross-origin browser requests are rejected.
 
 ## WebSocket
 

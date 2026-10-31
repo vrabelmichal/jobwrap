@@ -96,6 +96,7 @@ output = "authenticated"
 [retention]
 auto_prune = false
 prune_after_days = 90
+allow_web_prune = false
 ```
 
 ## Exposing over TailScale
@@ -175,6 +176,12 @@ deleted. Nothing is pruned unless the owner asks:
 * `[retention] auto_prune = true` makes the daemon do the same once at startup
   and then hourly for jobs older than `prune_after_days` (default 90, valid
   1–36500). `auto_prune` defaults to `false`.
+* `[retention] allow_web_prune = true` adds a "Prune old jobs" panel to the
+  dashboard for logged-in browser sessions. It previews the matching jobs
+  before deleting, suggests `prune_after_days` as the age, and asks for
+  confirmation. This deliberately lets any logged-in browser user delete old
+  finished jobs regardless of each profile's `delete` level; API tokens cannot
+  prune. `allow_web_prune` defaults to `false`.
 
 Running, stopped, and disconnected jobs are never pruned. A `lost` record with
 no finish time counts from its start time. Each prune that deletes something

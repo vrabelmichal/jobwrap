@@ -33,6 +33,9 @@ curl --fail-with-body --max-time 15 \
 | `/auth` | `authenticated`, `password_set` |
 | `/jobs` | Array of visible summaries; uses `display_name`, `profile_name`, `state`, `service_unit`, and log counters. Optional filters: `state`, `q`, `started_after`/`started_before`, `finished_after`/`finished_before` (RFC 3339 or `YYYY-MM-DD`), `hide_finished_older_than_days`, `offset`, `limit` |
 | `/jobs/query` | Same filters; returns `{jobs, total, offset, limit, counts, hidden_finished}`, default `limit` 50 |
+
+`POST /api/v1/jobs/prune` exists only for logged-in browser sessions when the
+owner set `[retention] allow_web_prune = true`; tokens cannot use it.
 | `/jobs/{id}` | Status object: `id`, `name`, `profile`, `state`, timestamps, `terminal_attached` |
 | `/jobs/{id}/details` | Permission-filtered command/cwd, process snapshot, log metadata, permission flags, and for detached jobs `service_unit` plus live systemd `service` state |
 | `/jobs/{id}/output?from=N` | Base64 terminal log slice, at most 1 MiB, starting at byte offset N |

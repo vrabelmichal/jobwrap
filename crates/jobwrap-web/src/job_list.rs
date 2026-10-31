@@ -145,6 +145,32 @@ pub async fn query_jobs(
     Ok(Json(query.apply(visible_jobs(&state, &headers))))
 }
 
+/// Body of `POST /api/v1/jobs/prune`.
+#[derive(Debug, Deserialize)]
+pub struct PruneRequest {
+    older_than_days: u32,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// `POST /api/v1/jobs/prune`: delete or preview old finished jobs. Requires
+/// `[retention] allow_web_prune` and a browser login.
+pub async fn prune_jobs(
+    State(state): State<RouterState>,
+    headers: HeaderMap,
+    Json(request): Json<PruneRequest>,
+) -> Result<Json<crate::PruneOutcome>, ApiError> {
+    crate::handlers::check_csrf(&headers)?;
+    let principal = crate::handlers::principal_from_headers(&state.service, &headers);
+    let service = state.service.clone();
+    tokio::task::spawn_blocking(move || {
+        service.prune_jobs(&principal, request.older_than_days, request.dry_run)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("prune task failed: {error}")))?
+    .map(Json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -53,6 +53,45 @@ impl JobService for DaemonService {
         self.registry.get_job(principal, id)
     }
 
+    fn web_prune(&self) -> jobwrap_web::WebPrune {
+        let retention = &self.registry.config.retention;
+        jobwrap_web::WebPrune {
+            enabled: retention.allow_web_prune,
+            default_days: retention.prune_after_days,
+        }
+    }
+
+    fn prune_jobs(
+        &self,
+        principal: &Principal,
+        older_than_days: u32,
+        dry_run: bool,
+    ) -> Result<jobwrap_web::PruneOutcome, ApiError> {
+        if !self.registry.config.retention.allow_web_prune {
+            return Err(ApiError::permission_denied(
+                "pruning from the web interface is disabled; set [retention] allow_web_prune = true to enable it",
+            ));
+        }
+        // Only a password login may prune; scoped tokens cannot express it.
+        let Principal::BrowserSession { session_id } = principal else {
+            return Err(ApiError::permission_denied(
+                "log in to the web interface to prune jobs",
+            ));
+        };
+        if older_than_days == 0 {
+            return Err(ApiError::bad_request("older_than_days must be at least 1"));
+        }
+        let (jobs, freed_log_bytes) = self
+            .registry
+            .prune_finished_jobs(older_than_days, dry_run, &format!("session:{session_id}"))
+            .map_err(ApiError::internal)?;
+        Ok(jobwrap_web::PruneOutcome {
+            jobs,
+            dry_run,
+            freed_log_bytes,
+        })
+    }
+
     fn service_status(
         &self,
         principal: &Principal,

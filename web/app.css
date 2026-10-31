@@ -374,6 +374,41 @@ main {
 .check-field:has(input:disabled) { opacity: 0.6; cursor: not-allowed; }
 .jobs-filters .filter-button { min-height: 2rem; margin-left: auto; }
 
+.prune-panel {
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-soft);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.prune-panel summary { cursor: pointer; color: var(--text); font-weight: 600; }
+.prune-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.6rem; }
+.prune-form input[type="number"] {
+  width: 5.5rem;
+  min-height: 2rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.prune-note { margin: 0.5rem 0 0; }
+.prune-result-list { margin: 0.4rem 0 0; padding-left: 1.2rem; }
+.danger-button {
+  min-height: 2rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 60%, var(--border));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.danger-button:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.danger-button:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .list-footer {
   display: flex;
   flex-wrap: wrap;

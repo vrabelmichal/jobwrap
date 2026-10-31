@@ -496,6 +496,81 @@ function initJobList() {
   }, 5000);
 }
 
+function initPrunePanel() {
+  const form = document.getElementById('prune-form');
+  if (!form) return;
+  const days = document.getElementById('prune-days');
+  const preview = document.getElementById('prune-preview');
+  const confirmButton = document.getElementById('prune-confirm');
+  const result = document.getElementById('prune-result');
+  let previewed = null;
+
+  function show(html) {
+    result.innerHTML = html;
+  }
+
+  function listJobs(jobs) {
+    const shown = jobs.slice(0, 10).map((job) => {
+      const ended = job.finished_at ? formatDate(job.finished_at) : `unknown (started ${formatDate(job.started_at)})`;
+      return `<li>${escapeHtml(job.display_name)} · ${escapeHtml(formatState(job.state))} · ended ${escapeHtml(ended)}</li>`;
+    }).join('');
+    const more = jobs.length > 10 ? `<li>…and ${jobs.length - 10} more</li>` : '';
+    return `<ul class="prune-result-list">${shown}${more}</ul>`;
+  }
+
+  // A preview is only valid for the age it was made with.
+  days.addEventListener('input', () => {
+    previewed = null;
+    confirmButton.hidden = true;
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const olderThan = Number.parseInt(days.value, 10);
+    if (!Number.isFinite(olderThan) || olderThan < 1) {
+      show('<p class="error">Enter an age of at least 1 day.</p>');
+      return;
+    }
+    preview.disabled = true;
+    confirmButton.hidden = true;
+    try {
+      const data = await postJson('/api/v1/jobs/prune', { older_than_days: olderThan, dry_run: true });
+      const count = data.jobs.length;
+      if (!count) {
+        previewed = null;
+        show(`<p>No finished jobs ended more than ${olderThan} days ago.</p>`);
+      } else {
+        previewed = olderThan;
+        show(`<p>${count} finished job${count === 1 ? '' : 's'} would be deleted:</p>${listJobs(data.jobs)}`);
+        confirmButton.textContent = `Delete ${count} job${count === 1 ? '' : 's'}`;
+        confirmButton.hidden = false;
+      }
+    } catch (error) {
+      show(`<p class="error">Preview failed: ${escapeHtml(error.message)}</p>`);
+    } finally {
+      preview.disabled = false;
+    }
+  });
+
+  confirmButton.addEventListener('click', async () => {
+    if (previewed === null) return;
+    if (!window.confirm(`Delete finished jobs that ended more than ${previewed} days ago, with their output logs? This cannot be undone.`)) return;
+    confirmButton.disabled = true;
+    try {
+      const data = await postJson('/api/v1/jobs/prune', { older_than_days: previewed, dry_run: false });
+      const count = data.jobs.length;
+      show(`<p>Deleted ${count} job${count === 1 ? '' : 's'} and ${escapeHtml(formatBytes(data.freed_log_bytes))} of logs.</p>`);
+      confirmButton.hidden = true;
+      previewed = null;
+      refreshJobs();
+    } catch (error) {
+      show(`<p class="error">Prune failed: ${escapeHtml(error.message)}</p>`);
+    } finally {
+      confirmButton.disabled = false;
+    }
+  });
+}
+
 async function refreshAuthControls() {
   const containers = document.querySelectorAll('[data-auth-controls]');
   if (!containers.length) return;
@@ -915,6 +990,7 @@ async function initJobDetailsPage() {
 }
 
 initJobList();
+initPrunePanel();
 if (document.getElementById('job-details')) initJobDetailsPage();
 initLaunchForm();
 initLoginForm();

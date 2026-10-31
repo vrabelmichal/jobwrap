@@ -50,7 +50,7 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Reject cross-origin state-changing requests from browsers.
-fn check_csrf(headers: &HeaderMap) -> Result<(), ApiError> {
+pub(crate) fn check_csrf(headers: &HeaderMap) -> Result<(), ApiError> {
     let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) else {
         return Ok(()); // Non-browser clients (curl, tokens) have no Origin.
     };
@@ -88,9 +88,9 @@ pub async fn index(State(state): State<RouterState>, headers: HeaderMap) -> Resp
     let page = crate::job_list::dashboard_default_query(chrono::Utc::now())
         .apply(state.service.list_jobs(&principal));
     let page_json = serde_json::to_string(&page).unwrap_or_else(|_| "{}".into());
-    let authenticated = !matches!(principal, Principal::Anonymous);
+    let can_prune = matches!(principal, Principal::BrowserSession { .. });
     render(
-        assets::index_page(&page_json, authenticated),
+        assets::index_page(&page_json, can_prune, state.service.web_prune()),
         &state.service.server_info().host_name,
     )
 }

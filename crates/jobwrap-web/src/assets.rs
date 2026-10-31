@@ -39,8 +39,29 @@ const AUTH_CONTROLS: &str = r#"<div class="auth-controls" data-auth-controls>
 
 /// The dashboard. `page_json` is the serialized default
 /// [`jobwrap_protocol::JobPage`]; the script pages and filters from there.
-pub fn index_page(page_json: &str, _authenticated: bool) -> String {
+///
+/// The prune panel is rendered only when `[retention] allow_web_prune` is set
+/// and the request comes from a logged-in browser session.
+pub fn index_page(page_json: &str, can_prune: bool, prune: crate::WebPrune) -> String {
     let page_json = html_attribute_escape(page_json);
+    let prune_panel = if prune.enabled && can_prune {
+        format!(
+            r#"<details id="prune-panel" class="prune-panel">
+      <summary>Prune old jobs…</summary>
+      <form id="prune-form" class="prune-form">
+        <label>Delete finished jobs that ended more than
+          <input id="prune-days" type="number" min="1" max="36500" value="{}" required> days ago</label>
+        <button id="prune-preview" type="submit" class="secondary-button">Preview</button>
+        <button id="prune-confirm" type="button" class="danger-button" hidden>Delete</button>
+      </form>
+      <p class="muted prune-note">Exited, signaled, and lost jobs are deleted with their output logs and event history. Running and disconnected jobs are never deleted. This cannot be undone.</p>
+      <div id="prune-result" aria-live="polite"></div>
+    </details>"#,
+            prune.default_days.clamp(1, 36_500)
+        )
+    } else {
+        String::new()
+    };
     let recent_days = crate::job_list::DEFAULT_RECENT_DAYS;
     let page_size = crate::job_list::DEFAULT_PAGE_SIZE;
     format!(
@@ -117,6 +138,7 @@ pub fn index_page(page_json: &str, _authenticated: bool) -> String {
       <label class="check-field"><input id="show-old-jobs" type="checkbox"> Include jobs finished more than {recent_days} days ago</label>
       <button id="clear-job-filters" type="button" class="filter-button">Clear filters</button>
     </div>
+    {prune_panel}
     <div id="job-list" data-page='{page_json}' data-recent-days="{recent_days}" data-page-size="{page_size}"></div>
     <div class="list-footer">
       <p id="job-list-meta" class="list-meta" aria-live="polite"></p>
@@ -568,19 +590,36 @@ mod tests {
 
     #[test]
     fn embedded_json_cannot_escape_its_attribute() {
-        let page = index_page(r#"[{"display_name":"' onmouseover='alert(1)"}]"#, false);
-        assert!(!page.contains("data-jobs='[{\"display_name\":\"' onmouseover="));
+        let page = index_page(
+            r#"[{"display_name":"' onmouseover='alert(1)"}]"#,
+            false,
+            crate::WebPrune::default(),
+        );
+        assert!(!page.contains("data-page='[{\"display_name\":\"' onmouseover="));
         assert!(page.contains("&#39; onmouseover=&#39;"));
     }
 
     #[test]
+    fn prune_panel_needs_configuration_and_login() {
+        let enabled = crate::WebPrune {
+            enabled: true,
+            default_days: 30,
+        };
+        assert!(!index_page("{}", true, crate::WebPrune::default()).contains("prune-panel"));
+        assert!(!index_page("{}", false, enabled).contains("prune-panel"));
+        let page = index_page("{}", true, enabled);
+        assert!(page.contains("id=\"prune-panel\""));
+        assert!(page.contains("value=\"30\""));
+    }
+
+    #[test]
     fn index_links_to_the_new_job_page() {
-        assert!(index_page("[]", true).contains("href=\"/jobs/new\""));
+        assert!(index_page("[]", true, crate::WebPrune::default()).contains("href=\"/jobs/new\""));
     }
 
     #[test]
     fn pages_share_authentication_controls() {
-        assert!(index_page("[]", false).contains("data-auth-controls"));
+        assert!(index_page("[]", false, crate::WebPrune::default()).contains("data-auth-controls"));
         assert!(login_page("/").contains("data-auth-controls"));
     }
 
@@ -588,7 +627,7 @@ mod tests {
     fn build_identity_is_visible_on_public_login_and_error_pages() {
         use jobwrap_core::build_info::{GIT_COMMIT, VERSION};
         for page in [
-            index_page("[]", false),
+            index_page("[]", false, crate::WebPrune::default()),
             login_page("/"),
             login_required_page("/jobs/01M4C70AH3D4R07FZJHRTYNPRA"),
             not_found_page("missing"),

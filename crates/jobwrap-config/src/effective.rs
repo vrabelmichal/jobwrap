@@ -94,6 +94,9 @@ pub struct RetentionConfig {
     /// Finished jobs (exited, signaled, lost) that ended more than this many
     /// days ago are deleted with their logs and events.
     pub prune_after_days: u64,
+    /// Let logged-in browser sessions prune finished jobs from the web
+    /// interface. This grants deletion beyond each profile's `delete` level.
+    pub allow_web_prune: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,6 +228,7 @@ impl EffectiveConfig {
             retention: RetentionConfig {
                 auto_prune: false,
                 prune_after_days: 90,
+                allow_web_prune: false,
             },
             profiles,
         }
@@ -378,6 +382,9 @@ impl EffectiveConfig {
             }
             if let Some(v) = retention.prune_after_days {
                 cfg.retention.prune_after_days = v;
+            }
+            if let Some(v) = retention.allow_web_prune {
+                cfg.retention.allow_web_prune = v;
             }
         }
         for (name, profile_file) in &raw.profiles {

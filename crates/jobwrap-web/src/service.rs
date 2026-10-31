@@ -54,6 +54,22 @@ impl LaunchCapabilities {
     }
 }
 
+/// Whether the dashboard offers pruning (`[retention] allow_web_prune`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WebPrune {
+    pub enabled: bool,
+    /// Suggested age, from `prune_after_days`.
+    pub default_days: u64,
+}
+
+/// What a prune request selected or deleted.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PruneOutcome {
+    pub jobs: Vec<jobwrap_protocol::PrunedJob>,
+    pub dry_run: bool,
+    pub freed_log_bytes: u64,
+}
+
 /// The set of operations the HTTP/WS layer can perform against the daemon.
 pub trait JobService: Send + Sync {
     /// Resolve a request's credentials into a principal.
@@ -121,6 +137,24 @@ pub trait JobService: Send + Sync {
         principal: &Principal,
         req: jobwrap_protocol::LaunchRequest,
     ) -> Result<(String, JobId), ApiError>;
+
+    /// Whether web pruning is enabled.
+    fn web_prune(&self) -> WebPrune {
+        WebPrune::default()
+    }
+
+    /// Delete (or with `dry_run`, list) finished jobs older than the given
+    /// age. Blocks on file and database work.
+    fn prune_jobs(
+        &self,
+        _principal: &Principal,
+        _older_than_days: u32,
+        _dry_run: bool,
+    ) -> Result<PruneOutcome, ApiError> {
+        Err(ApiError::permission_denied(
+            "pruning from the web interface is not available",
+        ))
+    }
 
     /// Report daemon-side process-creation capabilities for UI rendering.
     fn launch_capabilities(&self) -> LaunchCapabilities;

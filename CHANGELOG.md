@@ -24,6 +24,9 @@ All notable changes to jobwrap are documented in this file.
   [--dry-run]`, and automatic hourly pruning with `[retention] auto_prune =
   true` and `prune_after_days`. Nothing is deleted automatically by default;
   `defaults.retain_completed_days` still deletes nothing.
+- With `[retention] allow_web_prune = true`, logged-in browser users can
+  preview and then prune old finished jobs from the dashboard
+  (`POST /api/v1/jobs/prune`). Disabled by default; API tokens cannot prune.
 
 ### Fixed
 

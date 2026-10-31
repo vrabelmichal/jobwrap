@@ -49,6 +49,7 @@ pub fn build_router(service: Arc<dyn JobService>) -> Router {
         .route("/api/v1/logout", post(handlers::logout))
         .route("/api/v1/jobs", get(job_list::list_jobs))
         .route("/api/v1/jobs/query", get(job_list::query_jobs))
+        .route("/api/v1/jobs/prune", post(job_list::prune_jobs))
         .route(
             "/api/v1/jobs/:id",
             get(handlers::get_job).delete(handlers::delete_job),

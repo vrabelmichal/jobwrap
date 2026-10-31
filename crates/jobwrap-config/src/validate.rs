@@ -211,7 +211,7 @@ pub fn validate_effective(cfg: &EffectiveConfig) -> Vec<ValidationIssue> {
             }
         }
     }
-    if cfg.retention.auto_prune
+    if (cfg.retention.auto_prune || cfg.retention.allow_web_prune)
         && (cfg.retention.prune_after_days == 0 || cfg.retention.prune_after_days > 36_500)
     {
         issues.push(ValidationIssue::InvalidLimit {

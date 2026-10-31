@@ -199,3 +199,74 @@ test('filters in the address bar are restored and fetched', async () => {
   assert.equal(page.nodes['job-search'].value, 'build');
   assert.equal(page.nodes['page-size'].value, '25');
 });
+
+function prunePage({ confirmAnswer = true, jobs = [job('A', 'old-one'), job('B', 'old-two')] } = {}) {
+  const nodes = Object.fromEntries(['prune-form', 'prune-days', 'prune-preview', 'prune-confirm', 'prune-result']
+    .map((id) => [id, element()]));
+  nodes['prune-days'].value = '30';
+  nodes['prune-confirm'].hidden = true;
+  const posts = [];
+  const confirms = [];
+  const context = {
+    URLSearchParams,
+    document: {
+      hidden: false,
+      getElementById: (id) => nodes[id] || null,
+      querySelectorAll: () => [],
+      createElement: () => element(),
+    },
+    window: {
+      location: { pathname: '/', search: '' },
+      history: { replaceState() {} },
+      setInterval() {},
+      setTimeout() {},
+      clearTimeout() {},
+      confirm: (message) => { confirms.push(message); return confirmAnswer; },
+    },
+    fetch: async (url, options = {}) => {
+      if (options.method === 'POST') posts.push({ url, body: JSON.parse(options.body) });
+      const body = url === '/api/v1/jobs/prune'
+        ? { jobs, dry_run: JSON.parse(options.body).dry_run, freed_log_bytes: 2048 }
+        : { authenticated: true };
+      return { ok: true, status: 200, json: async () => body };
+    },
+  };
+  vm.runInNewContext(source, context);
+  return { nodes, posts, confirms };
+}
+
+test('prune previews before deleting and deletes the previewed age', async () => {
+  const page = prunePage();
+  await page.nodes['prune-form'].fire('submit');
+  assert.deepEqual(page.posts[0], { url: '/api/v1/jobs/prune', body: { older_than_days: 30, dry_run: true } });
+  assert.match(page.nodes['prune-result'].innerHTML, /2 finished jobs would be deleted/);
+  assert.equal(page.nodes['prune-confirm'].hidden, false);
+  assert.equal(page.nodes['prune-confirm'].textContent, 'Delete 2 jobs');
+  await page.nodes['prune-confirm'].fire('click');
+  assert.equal(page.confirms.length, 1);
+  assert.deepEqual(page.posts[1].body, { older_than_days: 30, dry_run: false });
+  assert.match(page.nodes['prune-result'].innerHTML, /Deleted 2 jobs and 2\.00 KiB of logs/);
+  assert.equal(page.nodes['prune-confirm'].hidden, true);
+});
+
+test('prune does nothing when the confirmation is declined or the age changed', async () => {
+  const declined = prunePage({ confirmAnswer: false });
+  await declined.nodes['prune-form'].fire('submit');
+  await declined.nodes['prune-confirm'].fire('click');
+  assert.equal(declined.posts.length, 1);
+
+  const changed = prunePage();
+  await changed.nodes['prune-form'].fire('submit');
+  changed.nodes['prune-days'].value = '1';
+  await changed.nodes['prune-days'].fire('input');
+  assert.equal(changed.nodes['prune-confirm'].hidden, true);
+  await changed.nodes['prune-confirm'].fire('click');
+  assert.equal(changed.posts.length, 1);
+});
+
+test('prune offers no deletion when nothing is old enough', async () => {
+  const page = prunePage({ jobs: [] });
+  await page.nodes['prune-form'].fire('submit');
+  assert.match(page.nodes['prune-result'].innerHTML, /No finished jobs ended more than 30 days ago/);
+  assert.equal(page.nodes['prune-confirm'].hidden, true);
+});

@@ -149,6 +149,8 @@ pub struct RetentionFile {
     pub auto_prune: Option<bool>,
     #[serde(default)]
     pub prune_after_days: Option<u64>,
+    #[serde(default)]
+    pub allow_web_prune: Option<bool>,
 }
 
 /// A named access profile.

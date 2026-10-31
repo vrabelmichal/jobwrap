@@ -468,6 +468,10 @@ fn config(action: ConfigCommand) -> anyhow::Result<()> {
                 "retention.prune_after_days = {}",
                 config.retention.prune_after_days
             );
+            println!(
+                "retention.allow_web_prune = {}",
+                config.retention.allow_web_prune
+            );
             for (name, profile) in &config.profiles {
                 println!(
                     "profiles.{name}.signal_kill = {}",
@@ -916,10 +920,12 @@ cache_results = true
 
 # Finished job records are kept until deleted. `jobwrap prune --older-than DAYS`
 # deletes old ones on request; set auto_prune = true to have the daemon delete
-# finished jobs older than prune_after_days every hour.
+# finished jobs older than prune_after_days every hour. allow_web_prune = true
+# lets any logged-in browser session prune finished jobs from the dashboard.
 [retention]
 auto_prune = false
 prune_after_days = 90
+allow_web_prune = false
 
 # The standard profile is public: anyone on the local network can watch
 # output. Public output may itself contain secrets; choose the private

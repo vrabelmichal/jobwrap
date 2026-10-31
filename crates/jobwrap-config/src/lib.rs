@@ -94,6 +94,15 @@ port = 9000
                 .expect("parses");
         assert!(!crate::validate_effective(&cfg).is_empty());
         assert!(parse("config_version = 1\n[retention]\nkeep = 3\n").is_err());
+        assert!(
+            !parse("config_version = 1\n")
+                .expect("parses")
+                .retention
+                .allow_web_prune
+        );
+        let cfg =
+            parse("config_version = 1\n[retention]\nallow_web_prune = true\n").expect("parses");
+        assert!(cfg.retention.allow_web_prune && !cfg.retention.auto_prune);
     }
 
     #[test]
