@@ -8,6 +8,7 @@ pub mod error;
 pub mod events;
 pub mod handlers;
 mod job_details;
+pub mod job_list;
 pub mod router;
 pub mod service;
 

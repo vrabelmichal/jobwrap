@@ -24,7 +24,10 @@ fn service(state: &RouterState) -> &Arc<dyn JobService> {
     &state.service
 }
 
-fn principal_from_headers(service: &Arc<dyn JobService>, headers: &HeaderMap) -> Principal {
+pub(crate) fn principal_from_headers(
+    service: &Arc<dyn JobService>,
+    headers: &HeaderMap,
+) -> Principal {
     let session = cookie_value(headers, SESSION_COOKIE);
     let bearer = bearer_token(headers);
     service.resolve_principal(session.as_deref(), bearer.as_deref())
@@ -82,8 +85,9 @@ fn render(html: String, host_name: &str) -> Response {
 
 pub async fn index(State(state): State<RouterState>, headers: HeaderMap) -> Response {
     let principal = principal_from_headers(service(&state), &headers);
-    let jobs = state.service.list_jobs(&principal);
-    let jobs_json = serde_json::to_string(&jobs).unwrap_or_else(|_| "[]".into());
+    let page = crate::job_list::dashboard_default_query(chrono::Utc::now())
+        .apply(state.service.list_jobs(&principal));
+    let jobs_json = serde_json::to_string(&page.jobs).unwrap_or_else(|_| "[]".into());
     let authenticated = !matches!(principal, Principal::Anonymous);
     render(
         assets::index_page(&jobs_json, authenticated),
@@ -268,12 +272,6 @@ pub async fn logout(State(state): State<RouterState>, headers: HeaderMap) -> Res
         service.logout(&session);
     }
     StatusCode::NO_CONTENT.into_response()
-}
-
-pub async fn list_jobs(State(state): State<RouterState>, headers: HeaderMap) -> Response {
-    let principal = principal_from_headers(service(&state), &headers);
-    let jobs = state.service.list_jobs(&principal);
-    Json(jobs).into_response()
 }
 
 pub async fn get_job(

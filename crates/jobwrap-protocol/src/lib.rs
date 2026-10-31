@@ -10,6 +10,7 @@
 
 pub mod codec;
 pub mod message;
+pub mod query;
 pub mod types;
 
 pub use codec::{decode_frame, encode_frame, FrameDecoder, PROTOCOL_HEADER_BYTES};
@@ -19,6 +20,7 @@ pub use message::{
     DetachedRequest, Hello, HelloRole, LaunchRequest, RegisterJob, RegisterResult,
     RegisterTerminal, ToWrapper, TokenCreateRequest, WrapperToDaemon, PROTOCOL_VERSION,
 };
+pub use query::{JobPage, JobQuery, StateCounts, StateGroup};
 pub use types::{
     ApiErrorCode, DaemonError, HelpProbeKind, HelpProbeRequest, HelpProbeResult, JobSummary,
     ManPage, ManPageMatch, OutputRange, OutputSlice, ProbeClassification, ProbeInvocation,
