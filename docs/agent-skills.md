@@ -2,7 +2,7 @@
 
 The maintained jobwrap skill is in `skills/jobwrap/`. Install the skill from
 the same release as the local `jobwrap` executable; check `jobwrap --version`.
-The 0.2.x skill teaches explicit `jobwrap run` launches, detached `-d` servers,
+The 0.3.x skill teaches explicit `jobwrap run` launches, detached `-d` servers,
 read-only `show`/`status` queries, and the current monitoring lifetime limits.
 
 ## Personal discovery directories

@@ -6,35 +6,6 @@ All notable changes to jobwrap are documented in this file.
 
 ### Added
 
-- Job history paging and filters. The dashboard loads one page at a time
-  (25/50/100/200 per page), filters by start and finish date ranges, and hides
-  jobs that finished more than 7 days ago by default, with a count of hidden
-  jobs and a one-click way to include them. Filters are kept in the URL.
-  `GET /api/v1/jobs` accepts the same filter parameters and keeps its array
-  response; the new `GET /api/v1/jobs/query` returns a page with totals and
-  per-state counts.
-- Detached job information from systemd. Detached records name their user
-  service; `jobwrap show`, the job details API, and the job page report the
-  service state, worker PID, and (with cgroup v2 accounting) memory, CPU time,
-  and tasks. After a daemon restart a still-running detached job is shown as
-  alive with its process snapshot, detached jobs registered by older daemons
-  are recognized by their service name, and a disconnected detached job whose
-  service has ended becomes `lost` instead of staying `disconnected`.
-- Opt-in pruning of old finished jobs: `jobwrap prune --older-than DAYS
-  [--dry-run]`, and automatic hourly pruning with `[retention] auto_prune =
-  true` and `prune_after_days`. Nothing is deleted automatically by default;
-  `defaults.retain_completed_days` still deletes nothing.
-- With `[retention] allow_web_prune = true`, logged-in browser users can
-  preview and then prune old finished jobs from the dashboard
-  (`POST /api/v1/jobs/prune`). Disabled by default; API tokens cannot prune.
-
-### Fixed
-
-- Deleting a job also deletes its event history.
-- `jobwrap list` columns line up, and `jobwrap show` reports terminal
-  attachment as "attached at launch"/"not attached at launch" rather than the
-  ambiguous "detached".
-
 - Browser tab titles and page headers identify the machine serving the jobwrap
   interface. `GET /api/v1/server` also reports the hostname.
 
@@ -115,6 +86,39 @@ All notable changes to jobwrap are documented in this file.
   terminal-output, and signal-control sections. The browser's live-output
   connection is labeled separately from the job state instead of appearing as
   an unexplained `disconnected` status.
+
+## [0.3.0] - 2026-11-02
+
+### Added
+
+- Job history paging and filters. The dashboard loads one page at a time
+  (25/50/100/200 per page), filters by start and finish date ranges, and hides
+  jobs that finished more than 7 days ago by default, with a count of hidden
+  jobs and a one-click way to include them. Filters are kept in the URL.
+  `GET /api/v1/jobs` accepts the same filter parameters and keeps its array
+  response; the new `GET /api/v1/jobs/query` returns a page with totals and
+  per-state counts.
+- Detached job information from systemd. Detached records name their user
+  service; `jobwrap show`, the job details API, and the job page report the
+  service state, worker PID, and (with cgroup v2 accounting) memory, CPU time,
+  and tasks. After a daemon restart a still-running detached job is shown as
+  alive with its process snapshot, detached jobs registered by older daemons
+  are recognized by their service name, and a disconnected detached job whose
+  service has ended becomes `lost` instead of staying `disconnected`.
+- Opt-in pruning of old finished jobs: `jobwrap prune --older-than DAYS
+  [--dry-run]`, and automatic hourly pruning with `[retention] auto_prune =
+  true` and `prune_after_days`. Nothing is deleted automatically by default;
+  `defaults.retain_completed_days` still deletes nothing.
+- With `[retention] allow_web_prune = true`, logged-in browser users can
+  preview and then prune old finished jobs from the dashboard
+  (`POST /api/v1/jobs/prune`). Disabled by default; API tokens cannot prune.
+
+### Fixed
+
+- Deleting a job also deletes its event history.
+- `jobwrap list` columns line up, and `jobwrap show` reports terminal
+  attachment as "attached at launch"/"not attached at launch" rather than the
+  ambiguous "detached".
 
 ## [0.2.1] - 2026-10-23
 

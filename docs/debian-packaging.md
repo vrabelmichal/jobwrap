@@ -45,10 +45,10 @@ For example, inspect the current amd64 release without installing it:
 
 ```sh
 python3 packaging/test-deb.py \
-  target/debian/jobwrap_0.2.1-1_amd64.deb \
-  target/debian/jobwrap-{codex,claude,opencode,kilo}-skills_0.2.1-1_all.deb
-lintian target/debian/jobwrap_0.2.1-1_amd64.deb \
-  target/debian/jobwrap-{codex,claude,opencode,kilo}-skills_0.2.1-1_all.deb
+  target/debian/jobwrap_0.3.0-1_amd64.deb \
+  target/debian/jobwrap-{codex,claude,opencode,kilo}-skills_0.3.0-1_all.deb
+lintian target/debian/jobwrap_0.3.0-1_amd64.deb \
+  target/debian/jobwrap-{codex,claude,opencode,kilo}-skills_0.3.0-1_all.deb
 ```
 
 The package test accepts any non-empty selection of skill packages.
@@ -123,13 +123,13 @@ Run these as an administrator (substitute the actual version/architecture):
 
 ```sh
 # Application only; no skill installation:
-apt install ./jobwrap_0.2.1-1_amd64.deb
+apt install ./jobwrap_0.3.0-1_amd64.deb
 # Application and the Codex and Claude Code skills:
-apt install ./jobwrap_0.2.1-1_amd64.deb ./jobwrap-codex-skills_0.2.1-1_all.deb \
-  ./jobwrap-claude-skills_0.2.1-1_all.deb
+apt install ./jobwrap_0.3.0-1_amd64.deb ./jobwrap-codex-skills_0.3.0-1_all.deb \
+  ./jobwrap-claude-skills_0.3.0-1_all.deb
 # Unattended installation with every skill package:
-DEBIAN_FRONTEND=noninteractive apt-get install -y ./jobwrap_0.2.1-1_amd64.deb \
-  ./jobwrap-{codex,claude,opencode,kilo}-skills_0.2.1-1_all.deb
+DEBIAN_FRONTEND=noninteractive apt-get install -y ./jobwrap_0.3.0-1_amd64.deb \
+  ./jobwrap-{codex,claude,opencode,kilo}-skills_0.3.0-1_all.deb
 ```
 
 Each package makes the skill available to **all users** of that agent on the
