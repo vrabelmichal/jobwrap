@@ -17,6 +17,9 @@ use clap::{Args, Parser, Subcommand};
                   Start a persistent server with `jobwrap run -d -- COMMAND`."
 )]
 pub struct Cli {
+    /// Emit structured output for list, show, doctor, wait and detached run.
+    #[arg(long, global = true)]
+    pub json: bool,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -32,6 +35,14 @@ pub enum Command {
     #[command(alias = "status")]
     Show { job: String },
     /// Print (a portion of) a job's recorded output.
+    /// Wait for a confirmed final result, with timeout in seconds.
+    Wait {
+        job: String,
+        #[arg(long, default_value_t = 3600)]
+        timeout: u64,
+    },
+    /// Diagnose monitoring and control without changing a job.
+    Doctor { job: String },
     Logs {
         job: String,
         #[arg(long, default_value_t = 0)]
@@ -179,6 +190,8 @@ pub struct LaunchArgs {
 #[derive(Debug, Clone, Args)]
 #[command(trailing_var_arg = true)]
 pub struct WrapArgs {
+    #[arg(skip)]
+    pub json: bool,
     /// A human-readable name for the job.
     #[arg(long, short)]
     pub name: Option<String>,

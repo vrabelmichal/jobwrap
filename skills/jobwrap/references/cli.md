@@ -165,3 +165,16 @@ cannot be made available merely by adding a token scope.
 `jobwrap auth status` reports browser authentication setup.
 `jobwrap auth set-password` uses an interactive non-echoing terminal prompt.
 Password removal and token revocation change access and require task authority.
+
+## Structured automation and waiting
+
+`jobwrap --json list`, `--json show JOB_ID`, `--json doctor JOB_ID`, and
+`--json run -d -- COMMAND` emit JSON without human banners. A launch reports
+registration and a null readiness field; readiness still belongs to the app.
+`doctor` explains connectivity, control, truncation and signal scope.
+
+`jobwrap wait JOB_ID --timeout SECONDS` waits for confirmed completion and
+returns the child exit code (128 + signal for termination). It retries temporary
+monitoring loss, fails on an unknown/lost outcome, and exits 124 on timeout
+without stopping the workload. Add `--json` for its final structured detail.
+Closed stdout pipes are handled without a Rust panic.

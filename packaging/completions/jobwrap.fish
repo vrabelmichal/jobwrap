@@ -33,3 +33,8 @@ complete -c jobwrap -n '__fish_seen_subcommand_from daemon; and __fish_seen_subc
 complete -c jobwrap -n '__fish_seen_subcommand_from config' -a 'path init validate effective explain'
 complete -c jobwrap -n '__fish_seen_subcommand_from auth' -a 'set-password remove-password status'
 complete -c jobwrap -n '__fish_seen_subcommand_from token' -a 'create list revoke'
+
+complete -c jobwrap -l json -d 'Structured output'
+complete -c jobwrap -f -n '__fish_use_subcommand' -a wait -d 'Wait for confirmed completion'
+complete -c jobwrap -f -n '__fish_use_subcommand' -a doctor -d 'Diagnose monitoring and control'
+complete -c jobwrap -n '__fish_seen_subcommand_from wait' -l timeout -r -d 'Timeout in seconds'

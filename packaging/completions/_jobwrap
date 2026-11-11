@@ -8,6 +8,8 @@ _jobwrap() {
         'list:List registered jobs'
         'show:Show job details'
         'status:Show job details (alias for show)'
+        'wait:Wait for confirmed completion'
+        'doctor:Diagnose monitoring and control'
         'logs:Print a job output log'
         'attach:Attach to a job (experimental)'
         'signal:Send a named signal'
@@ -31,6 +33,9 @@ _jobwrap() {
     fi
 
     case "${words[2]}" in
+        wait)
+            _arguments '--json[Structured output]' '--timeout[Timeout in seconds]:seconds:'
+            ;;
         run)
             _arguments '-d[Run in an independent user service]' \
                 '--detach[Run in an independent user service]' \

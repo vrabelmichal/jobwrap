@@ -126,6 +126,17 @@ while True: time.sleep(1)
         short = launch(sys.executable, "-c", 'print("exit-seven", flush=True); raise SystemExit(7)')
         wait_for(lambda: b"exited (7)" in cli("show", short).stdout or b"exited with code 7" in cli("show", short).stdout, "exit code 7 was not recorded")
         assert b"exit-seven" in cli("logs", short).stdout
+        waited = cli("--json", "wait", short, "--timeout", "2")
+        assert waited.returncode == 7 and json.loads(waited.stdout)["job"]["state"]["code"] == 7, waited.stderr
+        assert isinstance(json.loads(cli("list", "--json").stdout), list)
+        assert json.loads(cli("doctor", short, "--json").stdout)["control_available"] is False
+        pipe = subprocess.Popen([str(CLI), "list"], env=env, cwd=str(work), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pipe.stdout.close()
+        assert pipe.wait(timeout=5) == 0 and b"panicked" not in pipe.stderr.read()
+        structured = cli("--json", "run", "-d", "--", sys.executable, "-c", "pass")
+        launched = json.loads(structured.stdout)
+        assert structured.returncode == 0 and launched["registered"] and launched["ready"] is None
+        job_ids.append(launched["job_id"])
         quiet = launch(sys.executable, "-c", 'print("not-recorded")', no_record=True)
         wait_for(lambda: b"exited" in cli("show", quiet).stdout, "no-record job completion")
         assert cli("logs", quiet).stdout == b""

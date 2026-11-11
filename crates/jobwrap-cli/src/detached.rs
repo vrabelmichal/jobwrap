@@ -41,6 +41,13 @@ pub fn start(
         "requesting detached launch; upgrade and restart jobwrapd if it predates detached mode",
     )? {
         DaemonToClient::DetachedStarted { job_id } => {
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::json!({"job_id":job_id, "url": format!("{}/jobs/{job_id}", crate::daemon::public_url(config)), "service_unit": jobwrap_core::detached_service_unit(job_id), "registered":true, "ready":null})
+                );
+                return Ok(0);
+            }
             println!("jobwrap: registered detached job {job_id}");
             println!(
                 "jobwrap: web {}/jobs/{job_id}",
@@ -97,6 +104,7 @@ pub fn worker(job_id: JobId) -> anyhow::Result<i32> {
         .context("using detached working directory")?;
     crate::wrap::run_local(
         WrapArgs {
+            json: false,
             name: Some(request.name),
             profile: Some(request.profile),
             detach: true,
