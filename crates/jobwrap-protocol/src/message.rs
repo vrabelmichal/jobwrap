@@ -224,6 +224,8 @@ pub struct RegisterJob {
     pub terminal_device: Option<String>,
     #[serde(default)]
     pub worker_identity: Option<String>,
+    #[serde(default)]
+    pub execution: jobwrap_core::execution::ExecutionContext,
 }
 
 /// Wrapper-to-daemon messages sent after registration.

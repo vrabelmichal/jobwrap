@@ -130,6 +130,8 @@ pub struct JobRecord {
     /// Boot and process-start identity used for worker recovery.
     #[serde(default)]
     pub worker_identity: Option<String>,
+    #[serde(default)]
+    pub execution: crate::execution::ExecutionContext,
 }
 
 /// The transient user service name `jobwrap run -d` uses for a job.

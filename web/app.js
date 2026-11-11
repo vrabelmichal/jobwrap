@@ -134,6 +134,7 @@ const jobListState = {
   hiddenFinished: 0,
   filter: 'all',
   query: '',
+  environment: '',
   startedFrom: '',
   startedTo: '',
   finishedFrom: '',
@@ -148,6 +149,7 @@ const jobListState = {
 const JOB_FILTER_PARAMS = {
   state: 'filter',
   q: 'query',
+  environment: 'environment',
   started_from: 'startedFrom',
   started_to: 'startedTo',
   finished_from: 'finishedFrom',
@@ -177,6 +179,7 @@ function jobQueryParams(state) {
   const params = new URLSearchParams();
   if (state.filter && state.filter !== 'all') params.set('state', state.filter);
   if (state.query) params.set('q', state.query);
+  if (state.environment) params.set('environment', state.environment);
   const bounds = [
     ['started_after', state.startedFrom, false],
     ['started_before', state.startedTo, true],
@@ -316,6 +319,8 @@ function renderJobList() {
   for (const job of jobs) {
     const terminal = job.terminal || {};
     const pid = job.child_pid === null || job.child_pid === undefined ? '—' : job.child_pid;
+    const environment = job.execution && job.execution.python_environment;
+    const environmentText = environment ? `<span class="row-subtitle">${escapeHtml(environment.kind)} · ${escapeHtml(environment.name)}</span>` : '';
     const output = formatBytes(job.output_bytes);
     const truncated = job.log_truncated ? '<span class="row-warning">truncated</span>' : '';
     const visibility = job.visibility ? escapeHtml(job.visibility) : '—';
@@ -324,9 +329,9 @@ function renderJobList() {
       `<td data-label="Job"><a class="job-name" href="/jobs/${encodeURIComponent(job.id)}">${escapeHtml(job.display_name)}</a>` +
         `<span class="row-subtitle">${escapeHtml(job.profile_name)} · ${escapeHtml(shortJobId(job.id))}</span></td>` +
       `<td data-label="State"><span class="status-pill ${stateTone(job.state)}">${escapeHtml(formatState(job.state))}</span>` +
-        `<span class="row-subtitle">${visibility}</span></td>` +
+        `<span class="row-subtitle">${visibility}</span>${environmentText}</td>` +
       `<td data-label="Process"><span class="row-value">PID ${escapeHtml(pid)}</span>` +
-        `<span class="row-subtitle">${job.service_unit ? 'detached service' : (terminal.attached ? 'terminal attached' : 'no terminal at launch')}</span></td>` +
+        `<span class="row-subtitle">${job.service_unit ? 'detached service' : (terminal.attached ? 'terminal attached' : 'no terminal at launch')}</span>${environmentText}</td>` +
       `<td data-label="Started"><span class="row-value">${escapeHtml(formatDate(job.started_at))}</span>${finished}</td>` +
       `<td data-label="Runtime"><span class="row-value tabular">${escapeHtml(formatDuration(job.started_at, job.finished_at))}</span></td>` +
       `<td data-label="Output"><span class="row-value tabular">${escapeHtml(output)}</span>${truncated}</td>` +
@@ -344,6 +349,7 @@ function syncJobControls() {
   });
   const values = {
     'job-search': jobListState.query,
+    'job-environment': jobListState.environment,
     'started-from': jobListState.startedFrom,
     'started-to': jobListState.startedTo,
     'finished-from': jobListState.finishedFrom,
@@ -430,6 +436,7 @@ function initJobList() {
     });
   }
   const dateInputs = {
+    'job-environment': 'environment',
     'started-from': 'startedFrom',
     'started-to': 'startedTo',
     'finished-from': 'finishedFrom',
@@ -457,7 +464,7 @@ function initJobList() {
   if (clear) {
     clear.addEventListener('click', () => {
       Object.assign(jobListState, {
-        filter: 'all', query: '', startedFrom: '', startedTo: '', finishedFrom: '', finishedTo: '', showOld: false, offset: 0,
+        filter: 'all', query: '', environment: '', startedFrom: '', startedTo: '', finishedFrom: '', finishedTo: '', showOld: false, offset: 0,
       });
       syncJobControls();
       refreshJobs();
@@ -745,6 +752,12 @@ function renderJobDetails(data) {
   }
   setText('job-executable', data.executable || 'Not available with current access.');
   setText('job-working-directory', data.working_directory || 'Not available with current access.');
+  const execution = data.execution || {};
+  const environment = execution.python_environment;
+  setText('job-environment-info', environment ? `${environment.kind} · ${environment.name} · ${environment.path} (${environment.evidence})` : 'Not detected or not visible with current access.');
+  const buildText = (build) => build ? `${build.version} · ${build.commit}${build.dirty ? ' (modified sources)' : ''}` : 'Not recorded by this worker.';
+  setText('job-worker-build', buildText(execution.worker_build));
+  setText('job-daemon-build', buildText(execution.daemon_build));
 
   const log = data.log || {};
   setText('log-size', formatBytes(log.bytes_written));

@@ -16,6 +16,7 @@ mod access;
 pub mod build_info;
 mod error;
 mod event;
+pub mod execution;
 mod job;
 mod job_id;
 mod launch;

@@ -169,6 +169,17 @@ while True: time.sleep(1)
         assert replay_log.count(b"before-outage") == 1 and replay_log.count(b"during-outage") == 1, replay_log
         print("PASS: output replay has no duplicate chunks and final exit during daemon outage is recovered")
 
+        # An explicitly selected venv is detected without activation.
+        venv = work / "science-venv"
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True)
+        environment_job = launch(str(venv / "bin/python"), "-c", "print('environment-ready')", profile="standard")
+        metadata = json.loads(cli("--json", "show", environment_job).stdout)["job"]["execution"]
+        assert metadata["python_environment"]["path"] == str(venv), metadata
+        assert metadata["python_environment"]["kind"] == "venv", metadata
+        assert metadata["worker_build"]["commit"] and metadata["daemon_build"]["version"], metadata
+        hidden = json.loads(urllib.request.urlopen("http://127.0.0.1:{}/api/v1/jobs?environment=science-venv".format(daemon_port), timeout=10).read())
+        assert hidden == [], "status-only readers must not filter on private environment paths"
+
         # A public detached job: systemd reports on its service while connected.
         watched = launch(sys.executable, "-c", 'import os, pathlib, time; pathlib.Path("watched.pid").write_text(str(os.getpid())); time.sleep(120)', profile="standard", name="watched")
         wait_for(lambda: (work / "watched.pid").exists(), "watched startup")

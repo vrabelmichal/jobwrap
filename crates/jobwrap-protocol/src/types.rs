@@ -29,6 +29,8 @@ pub struct JobSummary {
     /// The systemd user service of a detached job.
     #[serde(default)]
     pub service_unit: Option<String>,
+    #[serde(default)]
+    pub execution: jobwrap_core::execution::ExecutionContext,
 }
 
 /// What the systemd user manager reports about a detached job's service.

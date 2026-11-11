@@ -143,6 +143,24 @@ fn show(job: &str) -> anyhow::Result<()> {
                     println!("finished:           {}", finished.to_rfc3339());
                 }
                 println!("output bytes:       {}", job.output_bytes);
+                if let Some(env) = &job.execution.python_environment {
+                    println!(
+                        "python environment: {} · {} ({})",
+                        env.kind, env.path, env.evidence
+                    );
+                }
+                if let Some(build) = &job.execution.worker_build {
+                    println!(
+                        "worker build:       {} {} (dirty: {})",
+                        build.version, build.commit, build.dirty
+                    );
+                }
+                if let Some(build) = &job.execution.daemon_build {
+                    println!(
+                        "registered daemon:  {} {} (dirty: {})",
+                        build.version, build.commit, build.dirty
+                    );
+                }
                 println!(
                     "terminal:           {}",
                     if job.terminal.attached {

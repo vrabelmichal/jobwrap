@@ -377,6 +377,27 @@ fn register_with_daemon(
         terminal_attached: saved.is_tty,
         terminal_size: saved.window_size,
         terminal_device: saved.device.clone(),
+        execution: jobwrap_core::execution::ExecutionContext {
+            worker_build: Some(jobwrap_core::execution::BuildIdentity::current()),
+            daemon_build: None,
+            host: nix::unistd::gethostname()
+                .ok()
+                .map(|s| s.to_string_lossy().into_owned()),
+            launch_mode: Some(
+                if preassigned_job_id.is_some() {
+                    "managed"
+                } else {
+                    "foreground"
+                }
+                .into(),
+            ),
+            python_environment: crate::environment::detect(
+                &identity.executable,
+                &identity.arguments,
+                &std::env::vars_os().collect(),
+                &std::env::current_dir().unwrap_or_default(),
+            ),
+        },
         worker_identity: jobwrap_core::worker_identity(std::process::id() as i32).ok(),
     });
 

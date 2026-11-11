@@ -270,3 +270,11 @@ test('prune offers no deletion when nothing is old enough', async () => {
   assert.match(page.nodes['prune-result'].innerHTML, /No finished jobs ended more than 30 days ago/);
   assert.equal(page.nodes['prune-confirm'].hidden, true);
 });
+
+test('Python environment filters round-trip through dashboard and API URLs', () => {
+  const context = { document: { getElementById: () => null, querySelectorAll: () => [] }, window: { location: { pathname: '/' } }, fetch: async () => ({ ok: true, json: async () => ({}) }), URLSearchParams };
+  vm.runInNewContext(source, context);
+  vm.runInNewContext("restoreDashboardState('?environment=science'); globalThis.apiQuery = jobQueryParams(jobListState).toString(); globalThis.addressQuery = dashboardSearch(jobListState);", context);
+  assert.match(context.apiQuery, /environment=science/);
+  assert.match(context.addressQuery, /environment=science/);
+});

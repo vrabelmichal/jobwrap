@@ -26,6 +26,7 @@ mod cli;
 mod commands;
 mod daemon;
 mod detached;
+mod environment;
 mod transport;
 mod wrap;
 

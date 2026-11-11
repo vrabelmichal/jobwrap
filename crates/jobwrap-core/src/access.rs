@@ -458,6 +458,7 @@ mod tests {
             log: crate::job::LogMetadata::default(),
             service_unit: None,
             worker_identity: None,
+            execution: Default::default(),
         }
     }
 

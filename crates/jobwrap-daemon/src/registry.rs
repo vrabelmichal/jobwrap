@@ -180,7 +180,7 @@ impl Registry {
             .map(|p| p.access.clone())
             .ok_or_else(|| format!("unknown profile `{}`", register.profile_name))?;
 
-        let record = JobRecord {
+        let mut record = JobRecord {
             id,
             display_name: jobwrap_core::JobName::new(register.display_name)
                 .map_err(|e| e.to_string())?,
@@ -203,6 +203,11 @@ impl Registry {
                 initial_size: register.terminal_size,
                 device: register.terminal_device,
             },
+            execution: {
+                let mut execution = register.execution;
+                execution.daemon_build = Some(jobwrap_core::execution::BuildIdentity::current());
+                execution
+            },
             worker_identity: register.worker_identity,
             log: Default::default(),
             service_unit: self
@@ -211,6 +216,14 @@ impl Registry {
                 .then(|| jobwrap_core::detached_service_unit(id)),
         };
 
+        record.execution.launch_mode = Some(
+            if record.service_unit.is_some() {
+                "detached"
+            } else {
+                "foreground"
+            }
+            .into(),
+        );
         let mut jobs = self.jobs.lock().expect("jobs lock");
         if jobs.contains_key(&id) {
             return Err("job already registered".to_string());
@@ -1143,7 +1156,20 @@ impl Registry {
                     jobwrap_core::AuthorizationDecision::Allow
                 )
             })
-            .map(to_summary)
+            .map(|job| {
+                let mut summary = to_summary(job);
+                if !matches!(
+                    authorize(
+                        principal,
+                        &job.record,
+                        jobwrap_core::Permission::ViewWorkingDirectory
+                    ),
+                    jobwrap_core::AuthorizationDecision::Allow
+                ) {
+                    summary.execution.python_environment = None;
+                }
+                summary
+            })
             .collect();
         out.sort_by_key(|j| j.started_at);
         out.reverse();
@@ -1363,5 +1389,6 @@ pub fn summary_for(record: &JobRecord) -> JobSummary {
         log_truncated: record.log.truncated,
         visibility,
         service_unit: record.service_unit.clone(),
+        execution: record.execution.clone(),
     }
 }

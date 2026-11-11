@@ -88,3 +88,20 @@ Official discovery references:
 - [Claude Code skill locations](https://code.claude.com/docs/en/skills)
 - [Kilo skill locations and reload](https://kilo.ai/docs/customize/skills)
 - [OpenCode skill discovery](https://opencode.ai/docs/skills/)
+
+## Launch environments and provenance
+
+New jobs record the worker and registration-daemon version/commit, launch host,
+launch mode, and a best-effort Python environment identity. Explicit venv/conda
+interpreter paths take precedence over inherited activation. Activated conda
+and venv paths are preserved; uv-created venvs are identified by their config.
+`uv run` project-environment inference is labeled as inferred launch context.
+No environment-manager executable is run for detection, and arbitrary environment
+variables are never copied to metadata. Activation is inherited unchanged.
+
+The details page and `show --json` report this context. The dashboard's Python
+environment filter (API `environment=`) matches type, name or path. General
+search also includes visible environments. Environment metadata follows working-
+directory permissions; status-only readers cannot see or filter private paths.
+Old jobs have no environment metadata. Shells can activate another environment
+later, so launch context is not a claim about every descendant's current Python.
