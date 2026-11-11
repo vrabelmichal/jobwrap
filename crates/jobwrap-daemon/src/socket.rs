@@ -101,7 +101,7 @@ async fn handle_connection(
     .await?;
 
     match hello.role {
-        HelloRole::Wrapper => handle_wrapper(stream, registry, peer_uid).await,
+        HelloRole::Wrapper => handle_wrapper(stream, registry, peer_uid, credentials.pid()).await,
         HelloRole::Cli => handle_cli(stream, registry, service, peer_uid).await,
     }
 }
@@ -111,6 +111,7 @@ async fn handle_wrapper(
     stream: UnixStream,
     registry: Arc<Registry>,
     peer_uid: u32,
+    peer_pid: i32,
 ) -> std::io::Result<()> {
     let (mut read, mut write) = stream.into_split();
     let first = match read_request_from(&mut read).await {
@@ -141,10 +142,19 @@ async fn handle_wrapper(
         return Ok(());
     };
     register.owner_uid = peer_uid;
+    if register.wrapper_pid != peer_pid
+        || register
+            .worker_identity
+            .as_ref()
+            .is_some_and(|id| jobwrap_core::worker_identity(peer_pid).ok().as_ref() != Some(id))
+    {
+        return Ok(());
+    }
 
     // Build the control channel. The writer task starts after the registration
     // reply is written so replies stay ordered.
     let (wrapper_tx, wrapper_rx) = mpsc::channel::<ToWrapper>(64);
+    let (ack_tx, mut ack_rx) = mpsc::channel::<()>(1);
 
     let job_id = register.id;
     let registered = registry.register_job(register, wrapper_tx);
@@ -173,8 +183,12 @@ async fn handle_wrapper(
     let writer_task = tokio::spawn(async move {
         let mut write = write;
         let mut wrapper_rx = wrapper_rx;
-        while let Some(msg) = wrapper_rx.recv().await {
-            let Some(frame) = codec::encode_frame(&DaemonToClient::ToWrapper(msg)).ok() else {
+        loop {
+            let response = tokio::select! {
+                msg = wrapper_rx.recv() => match msg { Some(msg) => DaemonToClient::ToWrapper(msg), None => break },
+                ack = ack_rx.recv() => match ack { Some(()) => DaemonToClient::WrapperAck, None => break },
+            };
+            let Some(frame) = codec::encode_frame(&response).ok() else {
                 break;
             };
             if write.write_all(&frame).await.is_err() {
@@ -195,9 +209,12 @@ async fn handle_wrapper(
                 data_base64,
             } => {
                 if let Some(data) = jobwrap_protocol::decode_input(&data_base64) {
-                    registry.append_output(job_id, sequence, &data);
+                    if let Err(error) = registry.append_output(job_id, sequence, &data) {
+                        break error;
+                    }
                 }
             }
+            ClientToDaemon::WrapperRecordingTruncated => registry.recording_truncated(job_id),
             ClientToDaemon::WrapperStopped => {
                 registry.handle_wrapper_event(job_id, WrapperToDaemon::Stopped)
             }
@@ -206,10 +223,12 @@ async fn handle_wrapper(
             }
             ClientToDaemon::WrapperExited { code } => {
                 registry.handle_wrapper_event(job_id, WrapperToDaemon::Exited { code });
+                let _ = ack_tx.send(()).await;
                 break "child exit reported".to_owned();
             }
             ClientToDaemon::WrapperSignaled { signal } => {
                 registry.handle_wrapper_event(job_id, WrapperToDaemon::Signaled { signal });
+                let _ = ack_tx.send(()).await;
                 break "child termination reported".to_owned();
             }
             ClientToDaemon::WrapperBye => {
@@ -220,9 +239,13 @@ async fn handle_wrapper(
             }
             _ => {}
         }
+        if ack_tx.send(()).await.is_err() {
+            break "acknowledgement failed".into();
+        }
     };
 
-    writer_task.abort();
+    drop(ack_tx);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), writer_task).await;
     registry.wrapper_disconnected(job_id, &disconnect_reason);
     Ok(())
 }
@@ -446,7 +469,8 @@ fn handle_cli_message(
             }
         }
         ClientToDaemon::Output { .. } => err(Code::BadRequest, "output is wrapper-only"),
-        ClientToDaemon::WrapperReady
+        ClientToDaemon::WrapperRecordingTruncated
+        | ClientToDaemon::WrapperReady
         | ClientToDaemon::WrapperStopped
         | ClientToDaemon::WrapperContinued
         | ClientToDaemon::WrapperExited { .. }

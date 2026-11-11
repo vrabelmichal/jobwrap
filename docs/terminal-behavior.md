@@ -89,14 +89,30 @@ finishes. Inspect `show`/`status` and workload readiness separately. A startup
 timeout can have an uncertain outcome; inspect the reported job ID and service
 before retrying. Registration failure terminates and reaps the detached child.
 
-Each worker belongs to `jobwrap-job-JOB_ID.service`. A daemon restart leaves
-that service alive, but there is no wrapper reconnection/adoption: recording
-and daemon control cease and the record becomes disconnected. Use
-`systemctl --user status jobwrap-job-JOB_ID.service` or
-`journalctl --user -u jobwrap-job-JOB_ID.service` for inspection, and
-`systemctl --user stop jobwrap-job-JOB_ID.service` for termination. A user
-manager shutdown, reboot, logout policy, or explicit service stop can end the
-job; detached mode does not configure login lingering or restart-on-boot.
+Each detached worker belongs to `jobwrap-job-JOB_ID.service`. Newly built
+workers reconnect after daemon restart, authenticate with their socket peer,
+boot ID and process start time, and replay output by acknowledged sequence.
+Input and signals become available again when connected. The CLI tries to start
+its daemon in an independent transient user service too; if the service manager
+is unavailable, it warns before falling back to a session-dependent daemon.
+Explicit `jobwrap daemon start --foreground` remains attached.
+
+Workers drain the PTY into a private, bounded recovery journal independently of
+the daemon. The journal is capped at 512 MiB of framed data (including base64
+overhead), in addition to the normal terminal log. Once full, further output is
+not recorded and truncation is reported. Final status remains recordable. Normal
+log pruning removes the matching journal. `--no-record` journals lifecycle
+metadata only; live output during an outage cannot be replayed in that mode.
+A worker waits briefly for final acknowledgement; if the daemon is still absent,
+it exits with its child's status. The daemon recovers completed journals on
+startup and periodic reconciliation, even if the worker has gone away.
+
+These guarantees require protocol version 2 in both binaries and newly launched
+workers. Upgrade the CLI and daemon together. Already-running old workers cannot
+acquire reconnection support. For those, inspect the named unit with
+`systemctl --user status jobwrap-job-JOB_ID.service` or its user journal.
+A user-manager shutdown, reboot, logout policy, or explicit service stop can end
+the job; detached mode does not configure login lingering or restart-on-boot.
 
 If writes to the original terminal fail, the wrapper continues draining the PTY
 and recording output through the daemon. Forwarding TERM/HUP also keeps the
@@ -111,7 +127,7 @@ connection, not the signal or external action that caused the wrapper to exit.
 The finish time remains unknown; `disconnected` does not establish workload
 failure or completion.
 
-There is no wrapper reconnection or adoption of an existing child. If the
+There is no adoption of a child whose wrapper has died. If the
 wrapper was the sole owner of the PTY master, its exit loses that monitoring
 channel. A surviving child can still be observed through its own log and Linux
 process information. Do not relaunch a workload solely because its jobwrap

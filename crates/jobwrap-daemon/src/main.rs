@@ -67,9 +67,8 @@ async fn main() -> Result<(), DaemonError> {
     // Load persisted jobs as disconnected/lost records.
     registry.load_persisted_jobs()?;
 
-    // Detached workers outlive the daemon but cannot reconnect. Ask the
-    // service manager about them now and periodically, so ended services do
-    // not stay `disconnected` forever.
+    // Recover durable results and inspect legacy disconnected services.
+    // New workers reconnect independently; legacy workers cannot.
     let reconcile_registry = registry.clone();
     let reconcile_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));

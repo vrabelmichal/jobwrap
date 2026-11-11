@@ -63,15 +63,14 @@ guarantee that a server is ready. Check `show`/`status`, output, and workload
 readiness. On an ambiguous startup timeout, inspect the reported job ID and unit
 before retrying. `--no-record` works; `--no-web` conflicts with `--detach`.
 
-Save the printed `jobwrap-job-JOB_ID.service` name. Services survive daemon
-shutdown, but the current protocol cannot reconnect/adopt wrappers: their
-records become `disconnected`, and daemon recording/control stop.
-`jobwrap show JOB_ID` still asks systemd about the service: a `service:` line of
-`active (running)` means the workload is alive. When the service has ended the
-record becomes `lost` (exit status unknown). Inspect with
-`systemctl --user status jobwrap-job-JOB_ID.service` or
-`journalctl --user -u jobwrap-job-JOB_ID.service`; when termination is authorized,
-use `systemctl --user stop jobwrap-job-JOB_ID.service` for a disconnected job.
+New protocol-v2 workers reconnect after daemon restart and replay recorded
+output by acknowledged sequence, restoring input and signal control. A private,
+bounded recovery journal also preserves completed results after worker exit.
+Upgrade both binaries together; existing old workers keep their old behavior.
+Use `jobwrap show JOB_ID` to inspect status and the named systemd service.
+A disconnected record alone does not establish workload failure. See
+[terminal behavior](../../../docs/terminal-behavior.md) for recording limits and recovery.
+
 User-manager shutdown, logout policies, reboot, or explicit stops can still
 terminate services. No login-lingering, boot persistence, or automatic restart
 is configured. Keep files needed by the workload available independently.

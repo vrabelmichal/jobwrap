@@ -62,6 +62,7 @@ impl JobState {
             (JobState::Running, JobState::Lost) => true,
             (JobState::Stopped, JobState::Running) => true,
             (JobState::Stopped, JobState::Signaled { .. }) => true,
+            (JobState::Stopped, JobState::Exited { .. }) => true,
             (JobState::Stopped, JobState::Disconnected) => true,
             (JobState::Disconnected, JobState::Running) => true,
             (JobState::Disconnected, JobState::Lost) => true,
@@ -70,6 +71,7 @@ impl JobState {
             // Terminal states.
             (JobState::Exited { .. }, JobState::Exited { .. }) => true,
             (JobState::Signaled { .. }, JobState::Exited { .. }) => true,
+            (JobState::Signaled { signal: a }, JobState::Signaled { signal: b }) => a == b,
             // Every state may record its own message again.
             (JobState::Registering, JobState::Registering) => true,
             (JobState::Running, JobState::Running) => true,
@@ -164,7 +166,7 @@ mod tests {
                 false,
             ),
             (JobState::Lost, JobState::Running, false),
-            (JobState::Stopped, JobState::Exited { code: 0 }, false),
+            (JobState::Stopped, JobState::Exited { code: 0 }, true),
         ];
         for (from, to, ok) in cases {
             assert_eq!(from.transition(to).is_ok(), ok, "{from} -> {to}");

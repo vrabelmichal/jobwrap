@@ -129,6 +129,50 @@ impl Registry {
     ) -> Result<RegisterResult, String> {
         validate_registration(&register)?;
         let id = register.id;
+        {
+            let mut jobs = self.jobs.lock().expect("jobs lock");
+            if let Some(job) = jobs.get_mut(&id) {
+                if register.worker_identity.is_none()
+                    || job.record.worker_identity != register.worker_identity
+                    || job.record.wrapper_pid != Some(jobwrap_core::ProcessId(register.wrapper_pid))
+                    || job.record.owner_uid != register.owner_uid
+                    || job.wrapper_tx.as_ref().is_some_and(|tx| !tx.is_closed())
+                {
+                    return Err("job identity mismatch or wrapper already connected".into());
+                }
+                if !job.record.state.is_finished() {
+                    job.record.state = JobState::Running;
+                }
+                if job.log.is_none() && register.record_output && self.config.defaults.record_output
+                {
+                    let mut log =
+                        OutputLog::open(&self.runtime.logs_dir, id).map_err(|e| e.to_string())?;
+                    log.recover(
+                        job.record.log.bytes_written,
+                        job.record.log.truncated,
+                        self.log_limits(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    job.log = Some(log);
+                }
+                job.wrapper_tx = Some(wrapper_tx);
+                self.store
+                    .lock()
+                    .expect("store lock")
+                    .update_job(&job.record)
+                    .map_err(|e| e.to_string())?;
+                let _ = self
+                    .broadcast_tx
+                    .send(jobwrap_web::ServerEvent::StateChanged {
+                        job_id: id,
+                        state: job.record.state,
+                    });
+                return Ok(RegisterResult {
+                    job_id: id,
+                    sequence_start: job.record.log.last_sequence,
+                });
+            }
+        }
         let profile = self
             .config
             .profiles
@@ -159,6 +203,7 @@ impl Registry {
                 initial_size: register.terminal_size,
                 device: register.terminal_device,
             },
+            worker_identity: register.worker_identity,
             log: Default::default(),
             service_unit: self
                 .detached
@@ -479,14 +524,16 @@ impl Registry {
     }
 
     /// Append a chunk of terminal output for a job.
-    pub fn append_output(&self, job_id: JobId, sequence: u64, data: &[u8]) {
+    pub fn append_output(&self, job_id: JobId, sequence: u64, data: &[u8]) -> Result<(), String> {
         let mut jobs = self.jobs.lock().expect("jobs lock");
         let Some(job) = jobs.get_mut(&job_id) else {
-            return;
+            return Ok(());
         };
+        if sequence <= job.record.log.last_sequence {
+            return Ok(());
+        }
+        let previous = job.record.clone();
         if let Some(log) = job.log.as_mut() {
-            let previous_bytes = job.record.log.bytes_written;
-            let was_truncated = job.record.log.truncated;
             let requested = data.len() as u64;
             let global_limit = self.log_limits().maximum_total_bytes;
             let reserved = !job.record.log.truncated
@@ -503,29 +550,49 @@ impl Registry {
                 self.recorded_log_bytes
                     .fetch_sub(requested, Ordering::AcqRel);
             }
+            log.sync().map_err(|e| e.to_string())?;
             job.record.log.last_sequence = sequence;
             job.record.log.bytes_written = log.size();
             job.record.log.truncated = log.is_truncated();
             if !recording {
                 job.record.log.truncated = true;
             }
-            if previous_bytes / (1024 * 1024) != job.record.log.bytes_written / (1024 * 1024)
-                || was_truncated != job.record.log.truncated
-            {
-                let _ = self
-                    .store
-                    .lock()
-                    .expect("store lock")
-                    .update_job(&job.record);
-            }
         } else {
             job.record.log.last_sequence = sequence;
+        }
+        if let Err(error) = self
+            .store
+            .lock()
+            .expect("store lock")
+            .update_job(&job.record)
+        {
+            job.record = previous;
+            if let Some(log) = job.log.as_mut() {
+                let _ = log.recover(
+                    job.record.log.bytes_written,
+                    job.record.log.truncated,
+                    self.log_limits(),
+                );
+            }
+            return Err(error.to_string());
         }
         let _ = self.broadcast_tx.send(jobwrap_web::ServerEvent::Output {
             job_id,
             sequence,
             data: data.to_vec(),
         });
+        Ok(())
+    }
+
+    pub fn recording_truncated(&self, id: JobId) {
+        if let Some(job) = self.jobs.lock().expect("jobs lock").get_mut(&id) {
+            job.record.log.truncated = true;
+            let _ = self
+                .store
+                .lock()
+                .expect("store lock")
+                .update_job(&job.record);
+        }
     }
 
     /// Handle a wrapper state report (stopped/continued/exited/signaled).
@@ -832,8 +899,154 @@ impl Registry {
         Ok(detached.then_some(status))
     }
 
+    /// Recover a completed worker even if it exited before daemon restart.
+    /// Only the stored identity and policy are trusted; journal registration
+    /// cannot create jobs or replace their access permissions.
+    fn recover_finished_journals(&self) {
+        use jobwrap_protocol::ClientToDaemon as Msg;
+        use std::io::{Read, Seek};
+        use std::os::unix::fs::OpenOptionsExt;
+        fn frame(file: &mut std::fs::File) -> Option<Msg> {
+            let mut header = [0; 4];
+            file.read_exact(&mut header).ok()?;
+            let size = u32::from_be_bytes(header) as usize;
+            if size > jobwrap_protocol::codec::MAX_FRAME_BYTES {
+                return None;
+            }
+            let mut body = vec![0; size];
+            file.read_exact(&mut body).ok()?;
+            serde_json::from_slice(&body).ok()
+        }
+        let candidates: Vec<_> = self
+            .jobs
+            .lock()
+            .expect("jobs lock")
+            .values()
+            .filter(|job| {
+                job.record.state == JobState::Disconnected || job.record.state == JobState::Lost
+            })
+            .filter(|job| job.record.worker_identity.is_some())
+            .map(|job| job.record.clone())
+            .collect();
+        for record in candidates {
+            let path = self
+                .runtime
+                .logs_dir
+                .join(format!("{}.recovery", record.id));
+            let Ok(mut file) = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(nix::libc::O_NOFOLLOW)
+                .open(path)
+            else {
+                continue;
+            };
+            let Some(Msg::RegisterJob(reg)) = frame(&mut file) else {
+                continue;
+            };
+            if reg.id != record.id
+                || reg.worker_identity != record.worker_identity
+                || reg.owner_uid != record.owner_uid
+                || Some(jobwrap_core::ProcessId(reg.wrapper_pid)) != record.wrapper_pid
+            {
+                continue;
+            }
+            let mut final_state = None;
+            while let Some(msg) = frame(&mut file) {
+                match msg {
+                    Msg::WrapperExited { code } => final_state = Some(JobState::Exited { code }),
+                    Msg::WrapperSignaled { signal } => {
+                        final_state = Some(JobState::Signaled { signal })
+                    }
+                    _ => {}
+                }
+            }
+            let Some(state) = final_state else {
+                continue;
+            };
+            // Freeze the on-disk boundary; a final report is written only
+            // after PTY EOF, so no later output can race this recovery.
+            {
+                let mut jobs = self.jobs.lock().expect("jobs lock");
+                let Some(job) = jobs.get_mut(&record.id) else {
+                    continue;
+                };
+                if job.wrapper_tx.as_ref().is_some_and(|tx| !tx.is_closed()) {
+                    continue;
+                }
+                if reg.record_output && self.config.defaults.record_output && job.log.is_none() {
+                    let Ok(mut log) = OutputLog::open(&self.runtime.logs_dir, record.id) else {
+                        continue;
+                    };
+                    if log
+                        .recover(
+                            job.record.log.bytes_written,
+                            job.record.log.truncated,
+                            self.log_limits(),
+                        )
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    job.log = Some(log);
+                }
+            }
+            if file.rewind().is_err() {
+                continue;
+            }
+            let mut failed = false;
+            while let Some(msg) = frame(&mut file) {
+                match msg {
+                    Msg::Output {
+                        sequence,
+                        data_base64,
+                    } => {
+                        if let Some(data) = jobwrap_protocol::decode_input(&data_base64) {
+                            if self.append_output(record.id, sequence, &data).is_err() {
+                                failed = true;
+                                break;
+                            }
+                        }
+                    }
+                    Msg::WrapperRecordingTruncated => self.recording_truncated(record.id),
+                    _ => {}
+                }
+            }
+            if failed {
+                continue;
+            }
+            let mut jobs = self.jobs.lock().expect("jobs lock");
+            if let Some(job) = jobs.get_mut(&record.id) {
+                job.record.state = state;
+                job.record.finished_at = file
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .map(chrono::DateTime::<Utc>::from);
+                let store = self.store.lock().expect("store lock");
+                if store.update_job(&job.record).is_ok() {
+                    let _ = store.insert_event(&Event::new(
+                        record.id,
+                        EventId(0),
+                        EventKind::Audit {
+                            detail:
+                                "Recovered worker output and final result from durable journal."
+                                    .into(),
+                        },
+                    ));
+                    let _ = self
+                        .broadcast_tx
+                        .send(jobwrap_web::ServerEvent::StateChanged {
+                            job_id: record.id,
+                            state,
+                        });
+                }
+            }
+        }
+    }
+
     /// Settle disconnected detached jobs against the service manager.
     pub fn reconcile_detached_services(&self) {
+        self.recover_finished_journals();
         let candidates: Vec<(JobId, String, bool)> = {
             let jobs = self.jobs.lock().expect("jobs lock");
             jobs.values()

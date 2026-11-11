@@ -92,6 +92,30 @@ impl OutputLog {
         })
     }
 
+    /// Restore the committed log boundary before replaying a worker journal.
+    pub fn recover(
+        &mut self,
+        bytes: u64,
+        truncated: bool,
+        limits: LogLimits,
+    ) -> std::io::Result<()> {
+        if self.file.metadata()?.len() < bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "recorded output file is shorter than committed metadata",
+            ));
+        }
+        self.file.set_len(bytes)?;
+        self.bytes_written = bytes;
+        self.truncated = truncated;
+        self.limits = limits;
+        Ok(())
+    }
+
+    pub fn sync(&self) -> std::io::Result<()> {
+        self.file.sync_data()
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -115,7 +139,12 @@ impl OutputLog {
             self.flush().ok();
             return false;
         }
-        if self.file.write_all(data).is_err() {
+        if self
+            .file
+            .seek(SeekFrom::End(0))
+            .and_then(|_| self.file.write_all(data))
+            .is_err()
+        {
             self.truncated = true;
             return false;
         }
@@ -183,6 +212,21 @@ pub fn delete_log(dir: &Path, job_id: JobId) -> std::io::Result<u64> {
     if let Err(error) = std::fs::remove_file(index) {
         if error.kind() != std::io::ErrorKind::NotFound {
             return Err(error);
+        }
+    }
+    let recovery = dir.join(format!("{job_id}.recovery"));
+    match std::fs::symlink_metadata(&recovery) {
+        Ok(meta) if !meta.file_type().is_symlink() && meta.is_file() => {
+            std::fs::remove_file(&recovery)?;
+            return Ok(size + meta.len());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid recovery journal",
+            ))
         }
     }
     Ok(size)

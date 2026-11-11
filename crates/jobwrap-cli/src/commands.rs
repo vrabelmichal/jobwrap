@@ -75,6 +75,7 @@ fn ensure_ok(response: DaemonToClient) -> anyhow::Result<()> {
 
 fn tag(msg: &DaemonToClient) -> &'static str {
     match msg {
+        DaemonToClient::WrapperAck => "wrapper_ack",
         DaemonToClient::HelloAck { .. } => "hello_ack",
         DaemonToClient::Registered { .. } => "registered",
         DaemonToClient::JobList { .. } => "job_list",

@@ -545,6 +545,7 @@ mod tests {
             terminal: Default::default(),
             log: Default::default(),
             service_unit: None,
+            worker_identity: None,
         }
     }
 

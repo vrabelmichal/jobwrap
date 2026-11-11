@@ -9,6 +9,7 @@ mod cli;
 mod commands;
 mod daemon;
 mod detached;
+mod transport;
 mod wrap;
 
 use clap::Parser;

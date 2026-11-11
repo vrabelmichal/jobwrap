@@ -36,3 +36,22 @@ pub use launch::{LaunchMode, TerminalTarget};
 pub use process::{ProcessGroupId, ProcessId, SessionId, TerminalMetadata, WindowSize};
 pub use signal::{Signal, SignalParseError};
 pub use state::{JobState, StateTransitionError};
+
+/// Identity survives reconnects but not reboot or PID reuse.
+pub fn worker_identity(pid: i32) -> std::io::Result<String> {
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let tail = stat
+        .rsplit_once(") ")
+        .ok_or_else(|| other_error("invalid process stat"))?
+        .1;
+    let start = tail
+        .split_whitespace()
+        .nth(19)
+        .ok_or_else(|| other_error("missing process start"))?;
+    Ok(format!("{}:{start}", boot.trim()))
+}
+
+fn other_error(e: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, e)
+}

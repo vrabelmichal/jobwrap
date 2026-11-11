@@ -159,6 +159,7 @@ fn open_connection(paths: &RuntimePaths, auto_start: bool) -> Result<UnixStream,
 
 fn protocol_tag(msg: &DaemonToClient) -> &'static str {
     match msg {
+        DaemonToClient::WrapperAck => "wrapper_ack",
         DaemonToClient::HelloAck { .. } => "hello_ack",
         DaemonToClient::Registered { .. } => "registered",
         DaemonToClient::JobList { .. } => "job_list",
@@ -274,6 +275,51 @@ fn start_daemon(paths: &RuntimePaths, connect_err: &std::io::Error) -> Result<()
         .truncate(true)
         .open(&log_path)
         .map_err(|e| ClientError::Startup(format!("could not open {}: {e}", log_path.display())))?;
+
+    // Run the daemon outside the agent's cgroup as well as its terminal.
+    // Pass only path configuration, never the workload's environment/secrets.
+    let mut managed = std::process::Command::new("systemd-run");
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    paths.daemon_socket.hash(&mut hash);
+    managed
+        .args(["--user", "--quiet", "--collect", "--service-type=exec"])
+        .arg(format!("--unit=jobwrapd-{:x}.service", hash.finish()));
+    for key in [
+        "XDG_RUNTIME_DIR",
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "XDG_DATA_HOME",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            let mut arg = std::ffi::OsString::from(format!("--setenv={key}="));
+            arg.push(value);
+            managed.arg(arg);
+        }
+    }
+    managed.arg("--").arg(&binary).arg("--foreground");
+    let managed_ok = managed
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if managed_ok {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if let Ok(stream) = UnixStream::connect(&paths.daemon_socket) {
+                if verify_peer_uid(&stream).is_ok() {
+                    return Ok(());
+                }
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        return Err(ClientError::Startup(
+            "independent daemon service did not create its socket; inspect its user journal".into(),
+        ));
+    }
+    eprintln!("jobwrap: user service manager unavailable; daemon lifetime depends on the launching session");
 
     let mut command = std::process::Command::new(&binary);
     command

@@ -12,7 +12,7 @@ use jobwrap_core::{JobId, JobState, Signal, WindowSize};
 use super::types::{HelpProbeRequest, JobSummary};
 
 /// The version of the wire protocol.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// The role of the peer that opened a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +73,7 @@ pub enum ClientToDaemon {
 
     // Wrapper lifecycle/state reports (flat variants so the nested enums do
     // not collide on the `type` tag).
+    WrapperRecordingTruncated,
     WrapperReady,
     WrapperStopped,
     WrapperContinued,
@@ -221,6 +222,8 @@ pub struct RegisterJob {
     pub terminal_attached: bool,
     pub terminal_size: Option<WindowSize>,
     pub terminal_device: Option<String>,
+    #[serde(default)]
+    pub worker_identity: Option<String>,
 }
 
 /// Wrapper-to-daemon messages sent after registration.
@@ -255,6 +258,8 @@ pub struct RegisterResult {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonToClient {
     /// Acknowledgment of the client's Hello.
+    /// Acknowledgement of a durably handled wrapper message.
+    WrapperAck,
     HelloAck {
         protocol_version: u32,
         daemon_pid: i32,

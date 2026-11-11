@@ -7,17 +7,14 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::thread;
 
 use anyhow::{bail, Context};
 use jobwrap_config::EffectiveConfig;
 use jobwrap_core::JobId;
-use jobwrap_protocol::{
-    codec, decode_input, ClientToDaemon, DaemonToClient, RegisterJob, ToWrapper,
-};
+use jobwrap_protocol::{codec, ClientToDaemon, DaemonToClient, RegisterJob};
 use jobwrap_pty::{
-    child, command_channel, run_relay, ChildStateChange, ChildStatus, DaemonCommand,
-    PseudoTerminal, RelaySinks, SavedTerminal, TerminalGuard,
+    child, command_channel, run_relay, ChildStatus, DaemonCommand, PseudoTerminal, RelaySinks,
+    SavedTerminal, TerminalGuard,
 };
 
 use crate::cli::WrapArgs;
@@ -316,11 +313,10 @@ pub(crate) fn sanitize_name(name: &str) -> String {
 
 /// The connected daemon link used by the wrapper.
 pub struct WrapperLink {
-    pub job_id: JobId,
-    read: std::os::unix::net::UnixStream,
-    writer_tx: mpsc::SyncSender<ClientToDaemon>,
-    writer_handle: std::thread::JoinHandle<()>,
-    sequence: u64,
+    pub(crate) job_id: JobId,
+    pub(crate) read: std::os::unix::net::UnixStream,
+    pub(crate) register: RegisterJob,
+    pub(crate) paths: jobwrap_config::RuntimePaths,
 }
 
 /// Identity information needed to register a job.
@@ -377,10 +373,11 @@ fn register_with_daemon(
             .unwrap_or_default(),
         profile_name: identity.profile_name,
         profile,
-        record_output: identity.record_output,
+        record_output: identity.record_output && config.defaults.record_output,
         terminal_attached: saved.is_tty,
         terminal_size: saved.window_size,
         terminal_device: saved.device.clone(),
+        worker_identity: jobwrap_core::worker_identity(std::process::id() as i32).ok(),
     });
 
     write
@@ -390,17 +387,14 @@ fn register_with_daemon(
     let reply = codec::read_frame(&mut read).map_err(|e| e.to_string())?;
     match reply {
         DaemonToClient::Registered { .. } => {
-            // Start the writer thread owning the write half.
-            // Bound daemon-bound output so a slow or wedged daemon applies
-            // backpressure instead of growing the wrapper without limit.
-            let (writer_tx, writer_rx) = mpsc::sync_channel(256);
-            let writer_handle = spawn_writer(write, writer_rx);
+            let ClientToDaemon::RegisterJob(register) = register else {
+                unreachable!()
+            };
             Ok(WrapperLink {
                 job_id,
                 read,
-                writer_tx,
-                writer_handle,
-                sequence: 0,
+                register,
+                paths: paths.clone(),
             })
         }
         DaemonToClient::Error { message, .. } => Err(message),
@@ -411,8 +405,8 @@ fn register_with_daemon(
 /// A handle that reports the final child status to the daemon and waits for
 /// the writer thread to drain before the wrapper process exits.
 pub struct Finalizer {
-    writer_tx: Option<mpsc::SyncSender<ClientToDaemon>>,
-    writer_handle: Option<std::thread::JoinHandle<()>>,
+    pub(crate) writer_tx: Option<mpsc::SyncSender<ClientToDaemon>>,
+    pub(crate) writer_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Finalizer {
@@ -441,105 +435,7 @@ fn build_sinks(
     link: WrapperLink,
     cmd_tx: mpsc::Sender<DaemonCommand>,
 ) -> (RelaySinks, Option<Finalizer>) {
-    let WrapperLink {
-        job_id,
-        read,
-        writer_tx,
-        writer_handle,
-        mut sequence,
-    } = link;
-
-    // Reader thread: daemon control messages -> relay commands.
-    thread::Builder::new()
-        .name("jw-daemon-reader".into())
-        .spawn(move || {
-            let mut read = read;
-            loop {
-                match codec::read_frame(&mut read) {
-                    Ok(DaemonToClient::ToWrapper(cmd)) => {
-                        let daemon_cmd = match cmd {
-                            ToWrapper::SendInput { data_base64 } => {
-                                DaemonCommand::Input(decode_input(&data_base64).unwrap_or_default())
-                            }
-                            ToWrapper::SendSignal { signal } => DaemonCommand::Signal(signal),
-                            ToWrapper::Resize { window_size } => DaemonCommand::Resize(window_size),
-                        };
-                        if cmd_tx.send(daemon_cmd).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(_) => continue,
-                    Err(_) => break,
-                }
-            }
-            tracing::warn!(job_id = %job_id, "daemon connection closed");
-        })
-        .expect("spawn daemon reader");
-
-    let output_tx = writer_tx.clone();
-    let state_tx = writer_tx.clone();
-    let signal_tx = writer_tx.clone();
-
-    let on_output = Box::new(move |data: &[u8]| {
-        sequence += 1;
-        let msg = ClientToDaemon::Output {
-            sequence,
-            data_base64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
-        };
-        let _ = output_tx.send(msg);
-    });
-
-    let on_state = Box::new(move |change: ChildStateChange| {
-        let msg = match change {
-            ChildStateChange::Stopped => ClientToDaemon::WrapperStopped,
-            ChildStateChange::Continued => ClientToDaemon::WrapperContinued,
-        };
-        let _ = state_tx.send(msg);
-    });
-
-    let on_signal = Box::new(move |signal: jobwrap_core::Signal| {
-        let msg = match signal {
-            jobwrap_core::Signal::Stop => ClientToDaemon::WrapperStopped,
-            jobwrap_core::Signal::Continue => ClientToDaemon::WrapperContinued,
-            _ => return,
-        };
-        let _ = signal_tx.send(msg);
-    });
-
-    let sinks = RelaySinks {
-        on_output: Some(on_output),
-        on_state: Some(on_state),
-        on_signal: Some(on_signal),
-    };
-    let finalizer = Finalizer {
-        writer_tx: Some(writer_tx),
-        writer_handle: Some(writer_handle),
-    };
-    (sinks, Some(finalizer))
-}
-
-/// Spawn a thread writing daemon-bound frames to the socket. Exits on
-/// `WrapperBye`, which the finalizer sends after the final status.
-fn spawn_writer(
-    write: std::os::unix::net::UnixStream,
-    rx: mpsc::Receiver<ClientToDaemon>,
-) -> std::thread::JoinHandle<()> {
-    thread::Builder::new()
-        .name("jw-daemon-writer".into())
-        .spawn(move || {
-            let mut write = write;
-            while let Ok(msg) = rx.recv() {
-                if matches!(msg, ClientToDaemon::WrapperBye) {
-                    break;
-                }
-                if let Ok(frame) = codec::encode_frame(&msg) {
-                    if write.write_all(&frame).is_err() {
-                        break;
-                    }
-                }
-            }
-        })
-        .expect("spawn writer")
+    crate::transport::sinks(link, cmd_tx)
 }
 
 /// A short human-readable status line for the final result.

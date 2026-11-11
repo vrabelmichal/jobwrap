@@ -36,6 +36,8 @@ def wait_for(check, message, timeout=15):
 def main():
     subprocess.run(["systemctl", "--user", "show-environment"], check=True, stdout=subprocess.DEVNULL)
     work = Path(tempfile.mkdtemp(prefix="detached-test-", dir=str(ROOT / "target")))
+    runtime = ROOT / "target" / ("r" + str(len(list((ROOT / "target").glob("r[0-9]*")))))
+    runtime.mkdir()
     print("Artifacts: " + str(work), flush=True)
     for folder in ["config/jobwrap", "state", "runtime", "data"]:
         (work / folder).mkdir(parents=True, exist_ok=True)
@@ -48,7 +50,7 @@ def main():
     # credentials into test files or transient unit definitions.
     env = {"HOME": os.environ["HOME"], "PATH": os.environ["PATH"],
            "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"),
-           "XDG_RUNTIME_DIR": str(work / "runtime"), "XDG_DATA_HOME": str(work / "data"),
+           "XDG_RUNTIME_DIR": str(runtime), "XDG_DATA_HOME": str(work / "data"),
            "DBUS_SESSION_BUS_ADDRESS": os.environ.get("DBUS_SESSION_BUS_ADDRESS", "unix:path=" + os.environ.get("XDG_RUNTIME_DIR", "/run/user/" + str(os.getuid())) + "/bus"),
            "JOBWRAP_BIN": str(CLI)}
     daemon_log = (work / "daemon.log").open("wb")
@@ -70,7 +72,7 @@ def main():
         return job_id
 
     try:
-        wait_for(lambda: (work / "runtime/jobwrap/daemon.sock").exists(), "test daemon startup")
+        wait_for(lambda: (runtime / "jobwrap/daemon.sock").exists(), "test daemon startup")
         (work / "serve.py").write_text("#!" + sys.executable + "\n" + '''import http.server, json, os, sys
 from pathlib import Path
 server = http.server.HTTPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler)
@@ -141,8 +143,20 @@ while True: time.sleep(1)
 
         def start_daemon(run_env):
             started = subprocess.Popen([str(DAEMON), "--foreground"], env=run_env, cwd=str(work), stdout=daemon_log, stderr=subprocess.STDOUT)
-            wait_for(lambda: cli("daemon", "status").returncode == 0 and (work / "runtime/jobwrap/daemon.sock").exists(), "test daemon restart")
+            wait_for(lambda: cli("daemon", "status").returncode == 0 and (runtime / "jobwrap/daemon.sock").exists(), "test daemon restart")
             return started
+
+        # Exercise recording and a child exit during complete daemon absence.
+        replay = launch(sys.executable, "-c", 'import pathlib,time; print("before-outage",flush=True); pathlib.Path("replay.ready").touch(); time.sleep(2); print("during-outage",flush=True); raise SystemExit(19)', profile="standard")
+        wait_for(lambda: (work / "replay.ready").exists(), "replay child startup")
+        daemon.kill(); daemon.wait(timeout=5)
+        time.sleep(7)
+        # final result remains durably queued in the independent worker
+        daemon = start_daemon(env)
+        wait_for(lambda: b"exited (19)" in cli("show", replay).stdout or b"exited with code 19" in cli("show", replay).stdout, "outage final result was lost")
+        replay_log = cli("logs", replay).stdout
+        assert replay_log.count(b"before-outage") == 1 and replay_log.count(b"during-outage") == 1, replay_log
+        print("PASS: output replay has no duplicate chunks and final exit during daemon outage is recovered")
 
         # A public detached job: systemd reports on its service while connected.
         watched = launch(sys.executable, "-c", 'import os, pathlib, time; pathlib.Path("watched.pid").write_text(str(os.getpid())); time.sleep(120)', profile="standard", name="watched")
@@ -172,6 +186,7 @@ while True: time.sleep(1)
         db = sqlite3.connect(str(work / "state/jobwrap/jobwrap.db"))
         record = json.loads(db.execute("SELECT record_json FROM jobs WHERE id = ?", (watched,)).fetchone()[0])
         assert record.pop("service_unit") == unit
+        record.pop("worker_identity", None)
         db.execute("UPDATE jobs SET record_json = ? WHERE id = ?", (json.dumps(record), watched))
         db.commit()
         db.close()
@@ -187,7 +202,7 @@ while True: time.sleep(1)
         data = details(watched)
         assert data["state"]["type"] == "disconnected" and data["service_unit"] == unit, data
         assert data["process"]["pid"] == watched_pid, data
-        subprocess.run(["systemctl", "--user", "stop", unit], check=True)
+        subprocess.run(["systemctl", "--user", "kill", "--signal=SIGKILL", unit], check=True)
         wait_for(lambda: b"state:              lost" in cli("show", watched).stdout, "ended detached service was not settled")
         events = json.loads(urllib.request.urlopen("http://127.0.0.1:{}/api/v1/jobs/{}/events".format(daemon_port, watched), timeout=10).read())
         assert any("is no longer running" in json.dumps(event["kind"]) for event in events), events
@@ -199,9 +214,11 @@ while True: time.sleep(1)
         # Reconnection/adoption is outside the current monitoring protocol.
         broken_bus_env = dict(env, DBUS_SESSION_BUS_ADDRESS="unix:path=" + str(work / "missing-bus"))
         daemon = start_daemon(broken_bus_env)
+        wait_for(lambda: b"state:              running" in cli("show", survivor).stdout, "worker did not reconnect without a service manager")
         shown = cli("show", survivor).stdout
-        # An unreachable manager proves nothing: the record stays disconnected.
-        assert b"disconnected" in shown and b"service:            unavailable" in shown, shown
+        assert b"service:            unavailable" in shown, shown
+        assert cli("stop", survivor).returncode == 0
+        wait_for(lambda: b"terminated by SIGTERM" in cli("show", survivor).stdout, "restored signal control failed")
         before = cli("list").stdout
         unavailable = cli("run", "-d", "--", sys.executable, "-c", 'raise SystemExit(0)')
         assert unavailable.returncode != 0 and b"working systemd user manager" in unavailable.stderr, unavailable.stderr

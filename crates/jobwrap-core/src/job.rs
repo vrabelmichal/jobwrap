@@ -127,6 +127,9 @@ pub struct JobRecord {
     /// Absent for foreground jobs and for records written before 0.3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_unit: Option<String>,
+    /// Boot and process-start identity used for worker recovery.
+    #[serde(default)]
+    pub worker_identity: Option<String>,
 }
 
 /// The transient user service name `jobwrap run -d` uses for a job.
