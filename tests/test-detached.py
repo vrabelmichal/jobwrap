@@ -56,6 +56,7 @@ def main():
     daemon_log = (work / "daemon.log").open("wb")
     daemon = subprocess.Popen([str(DAEMON), "--foreground"], env=env, cwd=str(work), stdout=daemon_log, stderr=subprocess.STDOUT)
     job_ids = []
+    legacy = None
     launcher_unit = "jobwrap-test-launcher-{}.service".format(work.name)
     daemon_launcher_unit = "jobwrap-test-daemon-agent-{}.service".format(work.name)
 
@@ -269,11 +270,32 @@ while True: time.sleep(1)
         assert "jobwrapd-" in Path("/proc/{}/cgroup".format(daemon_pid)).read_text()
         assert cli("--json", "list").returncode == 0
         print("PASS: automatically started daemon survives initiating agent cgroup SIGKILL")
+        # Upgrade management must work even if the old wire version differs.
+        assert cli("daemon", "stop").returncode == 0
+        (work / "legacy-daemon.py").write_text('import json,os,pathlib,socket,struct,sys\n' +
+            's=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen();pathlib.Path(sys.argv[2]).touch()\n' +
+            'while True:\n' +
+            ' c,_=s.accept()\n' +
+            ' header=c.recv(4)\n' +
+            ' if header:\n' +
+            '  c.recv(struct.unpack(">I",header)[0])\n' +
+            '  body=json.dumps({"type":"hello_ack","protocol_version":1,"daemon_pid":os.getpid()}).encode();c.sendall(struct.pack(">I",len(body))+body)\n' +
+            ' c.close()\n')
+        legacy = subprocess.Popen([sys.executable, str(work / "legacy-daemon.py"), str(runtime / "jobwrap/daemon.sock"), str(work / "legacy.ready")], cwd=str(work), stdout=daemon_log, stderr=subprocess.STDOUT)
+        wait_for(lambda: (work / "legacy.ready").exists(), "legacy fixture startup")
+        assert b"incompatible protocol" in cli("daemon", "status").stdout
+        restarted = cli("daemon", "restart")
+        assert restarted.returncode == 0, restarted.stderr
+        assert legacy.wait(timeout=5) == -15
+        assert cli("--json", "list").returncode == 0
+        print("PASS: new CLI restarts an incompatible legacy daemon using verified socket peer identity")
         print("PASS: detached HTTP server survived agent cgroup SIGKILL; argv/environment/cwd, logs, signals, exit status, no-record, status alias, and invalid requests verified")
         print("PASS: detached workload survived daemon shutdown; missing manager failed without launching a fallback")
         print("PASS: service state, usage, and process snapshot reported across a daemon restart; older records adopted; an ended service settled as lost")
         print("Artifacts: " + str(work))
     finally:
+        if legacy is not None and legacy.poll() is None:
+            legacy.terminate(); legacy.wait(timeout=5)
         cli("daemon", "stop")
         subprocess.run(["systemctl", "--user", "stop", daemon_launcher_unit], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for job_id in job_ids:

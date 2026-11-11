@@ -76,7 +76,13 @@ impl DaemonClient {
                     daemon_pid,
                 })
             }
-            DaemonToClient::Error { message, .. } => Err(ClientError::Daemon(message)),
+            DaemonToClient::Error { code, message } => {
+                if code == "version_rejected" {
+                    Err(ClientError::VersionRejected)
+                } else {
+                    Err(ClientError::Daemon(message))
+                }
+            }
             other => Err(ClientError::Daemon(format!(
                 "expected hello ack, got {}",
                 protocol_tag(&other)
@@ -208,6 +214,27 @@ fn verify_peer_uid(stream: &UnixStream) -> Result<(), ClientError> {
     Ok(())
 }
 
+/// Kernel-verified peer identity remains usable across wire-protocol upgrades.
+/// Never trust a saved PID file or an incompatible daemon's claimed PID.
+pub(crate) fn daemon_peer_pid(paths: &RuntimePaths) -> Result<Option<i32>, ClientError> {
+    let stream = match connect_socket(&paths.daemon_socket) {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Ok(None)
+        }
+        Err(error) => return Err(error.into()),
+    };
+    verify_peer_uid(&stream)?;
+    let credentials =
+        socket::getsockopt(&stream, sockopt::PeerCredentials).map_err(std::io::Error::from)?;
+    Ok(Some(credentials.pid()))
+}
+
 /// Locate the `jobwrapd` binary.
 pub(crate) fn find_daemon_binary() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("JOBWRAPD_BIN") {
@@ -284,7 +311,11 @@ fn start_daemon(paths: &RuntimePaths, connect_err: &std::io::Error) -> Result<()
     paths.daemon_socket.hash(&mut hash);
     managed
         .args(["--user", "--quiet", "--collect", "--service-type=exec"])
-        .arg(format!("--unit=jobwrapd-{:x}.service", hash.finish()));
+        .arg(format!(
+            "--unit=jobwrapd-{:x}-{}.service",
+            hash.finish(),
+            std::process::id()
+        ));
     for key in [
         "DBUS_SESSION_BUS_ADDRESS",
         "XDG_RUNTIME_DIR",

@@ -358,6 +358,12 @@ fn daemon(action: DaemonCommand) -> anyhow::Result<()> {
                 println!("running (pid {})", client.daemon_pid);
                 Ok(())
             }
+            Err(crate::daemon::ClientError::VersionRejected) => {
+                if let Some(pid) = crate::daemon::daemon_peer_pid(&paths)? {
+                    println!("running (pid {pid}); incompatible protocol, use `jobwrap daemon restart` after upgrading both binaries");
+                }
+                Ok(())
+            }
             Err(_) => {
                 println!("not running");
                 Ok(())
@@ -403,10 +409,9 @@ fn start_and_report(paths: &jobwrap_config::RuntimePaths) -> anyhow::Result<()> 
 /// comes from a verified live socket connection; a stale pid file must never
 /// be allowed to signal an unrelated process.
 fn stop_daemon(paths: &jobwrap_config::RuntimePaths) -> anyhow::Result<Option<i32>> {
-    let Ok(client) = DaemonClient::connect(paths, false) else {
+    let Some(pid) = crate::daemon::daemon_peer_pid(paths)? else {
         return Ok(None);
     };
-    let pid = client.daemon_pid;
     nix::sys::signal::kill(
         nix::unistd::Pid::from_raw(pid),
         nix::sys::signal::Signal::SIGTERM,
