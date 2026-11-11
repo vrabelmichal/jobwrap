@@ -4,6 +4,7 @@
 _jobwrap() {
     local -a subcommands
     subcommands=(
+        'server-unit:Print a persistent server service definition'
         'run:Run a command under jobwrap'
         'list:List registered jobs'
         'show:Show job details'

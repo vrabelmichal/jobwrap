@@ -357,7 +357,7 @@ fn register_with_daemon(
         .join(" ");
 
     let job_id = preassigned_job_id.unwrap_or(JobId::generate().map_err(|e| e.to_string())?);
-    let register = ClientToDaemon::RegisterJob(RegisterJob {
+    let register = ClientToDaemon::RegisterJob(Box::new(RegisterJob {
         id: job_id,
         display_name: sanitize_name(&identity.job_name),
         owner_uid: nix::unistd::Uid::current().as_raw(),
@@ -399,7 +399,7 @@ fn register_with_daemon(
             ),
         },
         worker_identity: jobwrap_core::worker_identity(std::process::id() as i32).ok(),
-    });
+    }));
 
     write
         .write_all(&codec::encode_frame(&register).map_err(|e| e.to_string())?)
@@ -414,7 +414,7 @@ fn register_with_daemon(
             Ok(WrapperLink {
                 job_id,
                 read,
-                register,
+                register: *register,
                 paths: paths.clone(),
             })
         }

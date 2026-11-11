@@ -865,6 +865,14 @@ function renderJobDetails(data) {
   setText('job-worker-build', buildText(execution.worker_build));
   setText('job-daemon-build', buildText(execution.daemon_build));
 
+  const monitoring = data.monitoring || {};
+  setText('last-contact', formatDate(monitoring.last_contact_at));
+  setText('last-output', formatDate(monitoring.last_output_at));
+  const disconnectDetail = document.getElementById('disconnect-detail');
+  if (disconnectDetail) {
+    disconnectDetail.hidden = !monitoring.disconnect_reason;
+    disconnectDetail.textContent = monitoring.disconnect_reason ? `Connection lost ${formatDate(monitoring.disconnected_at)}: ${monitoring.disconnect_reason}` : '';
+  }
   const log = data.log || {};
   setText('log-size', formatBytes(log.bytes_written));
   const truncated = document.getElementById('log-truncated');

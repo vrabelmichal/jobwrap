@@ -19,6 +19,14 @@ pub fn dispatch(command: Command) -> anyhow::Result<()> {
             let code = run(args).context("jobwrap wrapper failed")?;
             std::process::exit(code);
         }
+        Command::ServerUnit {
+            name,
+            profile,
+            command,
+        } => {
+            println!("{}", crate::server_unit::render(&name, &profile, &command)?);
+            Ok(())
+        }
         Command::List => list(),
         Command::Wait { job, timeout } => wait(&job, timeout, false),
         Command::Doctor { job } => diagnose(&job, false),
@@ -1018,10 +1026,22 @@ fn job_detail(job: &str) -> anyhow::Result<DaemonToClient> {
     )
 }
 fn wait(job: &str, timeout: u64, json: bool) -> anyhow::Result<()> {
+    parse_job_id(job)?;
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(timeout.min(365 * 86400));
     loop {
-        if let Ok(detail @ DaemonToClient::JobDetail { job: Some(_), .. }) = job_detail(job) {
+        let detail = match job_detail(job) {
+            Ok(detail) => Some(detail),
+            Err(error)
+                if error
+                    .chain()
+                    .any(|e| e.downcast_ref::<crate::daemon::ClientError>().is_some()) =>
+            {
+                None
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(detail @ DaemonToClient::JobDetail { job: Some(_), .. }) = detail {
             let DaemonToClient::JobDetail {
                 job: Some(ref summary),
                 ..

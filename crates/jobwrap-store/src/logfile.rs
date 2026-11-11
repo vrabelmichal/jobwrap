@@ -145,6 +145,7 @@ impl OutputLog {
             .and_then(|_| self.file.write_all(data))
             .is_err()
         {
+            let _ = self.file.set_len(self.bytes_written);
             self.truncated = true;
             return false;
         }
@@ -218,7 +219,6 @@ pub fn delete_log(dir: &Path, job_id: JobId) -> std::io::Result<u64> {
     match std::fs::symlink_metadata(&recovery) {
         Ok(meta) if !meta.file_type().is_symlink() && meta.is_file() => {
             std::fs::remove_file(&recovery)?;
-            return Ok(size + meta.len());
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),

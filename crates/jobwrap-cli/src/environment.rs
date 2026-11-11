@@ -125,4 +125,36 @@ mod tests {
             "venv"
         );
     }
+    #[test]
+    fn explicit_interpreters_override_activation_and_uv_is_identified() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("target")
+            .join(format!("environment-test-{}", std::process::id()));
+        let uv = root.join(".venv");
+        std::fs::create_dir_all(uv.join("bin")).unwrap();
+        std::fs::write(uv.join("pyvenv.cfg"), "uv = 0.9.0\n").unwrap();
+        let mut env = HashMap::new();
+        env.insert("VIRTUAL_ENV".into(), "/different/env".into());
+        let direct = detect(&uv.join("bin/python").into_os_string(), &[], &env, &root).unwrap();
+        assert_eq!(direct.kind, "uv");
+        assert_eq!(direct.path, uv.to_string_lossy());
+        let inferred = detect(
+            &"uv".into(),
+            &["run".into(), "script.py".into()],
+            &env,
+            &root,
+        )
+        .unwrap();
+        assert_eq!(inferred.kind, "uv");
+        assert!(inferred.evidence.contains("inferred"));
+        let conda = root.join("conda");
+        std::fs::create_dir_all(conda.join("conda-meta")).unwrap();
+        let direct = detect(&conda.join("bin/python").into_os_string(), &[], &env, &root).unwrap();
+        assert_eq!(direct.kind, "conda");
+        assert_eq!(direct.path, conda.to_string_lossy());
+    }
 }

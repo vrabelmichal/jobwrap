@@ -27,6 +27,7 @@ mod commands;
 mod daemon;
 mod detached;
 mod environment;
+mod server_unit;
 mod transport;
 mod wrap;
 

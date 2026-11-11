@@ -3,7 +3,7 @@ _jobwrap() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local subcommands="run list show status wait doctor logs attach signal stop open daemon config auth token launch attach-launch inspect terminals prune help"
+    local subcommands="run server-unit list show status wait doctor logs attach signal stop open daemon config auth token launch attach-launch inspect terminals prune help"
 
     COMPREPLY=()
     if [[ "${COMP_WORDS[1]}" == signal && "$COMP_CWORD" == 3 ]]; then

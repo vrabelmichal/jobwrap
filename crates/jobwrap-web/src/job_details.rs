@@ -108,6 +108,7 @@ fn details_response(
             "truncated": record.log.truncated,
         },
         "process": process,
+        "monitoring": record.monitoring,
         "execution": {
             "worker_build": record.execution.worker_build,
             "daemon_build": record.execution.daemon_build,

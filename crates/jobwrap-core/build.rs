@@ -24,14 +24,26 @@ fn main() {
     if root.join(".git").exists() {
         // Watch Git metadata and sources so rebuilding after a commit, branch
         // switch, or tracked source edit cannot reuse stale build information.
-        for path in [".git/HEAD", ".git/index", ".git/packed-refs"] {
-            println!("cargo:rerun-if-changed={}", root.join(path).display());
-        }
+        let mut metadata = vec![
+            "HEAD".to_string(),
+            "index".to_string(),
+            "packed-refs".to_string(),
+        ];
         if let Some(reference) = git(root, &["symbolic-ref", "-q", "HEAD"]) {
-            println!(
-                "cargo:rerun-if-changed={}",
-                root.join(".git").join(reference).display()
-            );
+            metadata.push(reference);
+        }
+        for name in metadata {
+            // Linked worktrees keep HEAD/index in their actual git-dir,
+            // and shared refs in the common dir; .git itself is a text file.
+            if let Some(path) = git(root, &["rev-parse", "--git-path", &name]) {
+                let path = Path::new(&path);
+                let path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    root.join(path)
+                };
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
         }
         if let Some(files) = git(root, &["ls-files"]) {
             for file in files.lines() {

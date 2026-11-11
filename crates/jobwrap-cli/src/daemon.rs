@@ -286,6 +286,7 @@ fn start_daemon(paths: &RuntimePaths, connect_err: &std::io::Error) -> Result<()
         .args(["--user", "--quiet", "--collect", "--service-type=exec"])
         .arg(format!("--unit=jobwrapd-{:x}.service", hash.finish()));
     for key in [
+        "DBUS_SESSION_BUS_ADDRESS",
         "XDG_RUNTIME_DIR",
         "XDG_CONFIG_HOME",
         "XDG_STATE_HOME",

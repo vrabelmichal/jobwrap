@@ -57,6 +57,7 @@ def main():
     daemon = subprocess.Popen([str(DAEMON), "--foreground"], env=env, cwd=str(work), stdout=daemon_log, stderr=subprocess.STDOUT)
     job_ids = []
     launcher_unit = "jobwrap-test-launcher-{}.service".format(work.name)
+    daemon_launcher_unit = "jobwrap-test-daemon-agent-{}.service".format(work.name)
 
     def cli(*args, **kwargs):
         return subprocess.run([str(CLI)] + list(args), env=env, cwd=str(work), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, **kwargs)
@@ -123,9 +124,14 @@ while True: time.sleep(1)
         assert cli("stop", job_id).returncode == 0
         wait_for(lambda: b"terminated by SIGTERM" in cli("show", job_id).stdout, "detached server stop was not recorded")
 
+        assert cli("--json", "wait", job_id, "--timeout", "2").returncode == 143
+        assert cli("wait", "invalid-job-id", "--timeout", "10").returncode == 1
+
         short = launch(sys.executable, "-c", 'print("exit-seven", flush=True); raise SystemExit(7)')
         wait_for(lambda: b"exited (7)" in cli("show", short).stdout or b"exited with code 7" in cli("show", short).stdout, "exit code 7 was not recorded")
         assert b"exit-seven" in cli("logs", short).stdout
+        observation = json.loads(cli("--json", "show", short).stdout)["job"]["monitoring"]
+        assert observation["last_contact_at"] and observation["last_output_at"], observation
         waited = cli("--json", "wait", short, "--timeout", "2")
         assert waited.returncode == 7 and json.loads(waited.stdout)["job"]["state"]["code"] == 7, waited.stderr
         assert isinstance(json.loads(cli("list", "--json").stdout), list)
@@ -184,6 +190,8 @@ while True: time.sleep(1)
         watched = launch(sys.executable, "-c", 'import os, pathlib, time; pathlib.Path("watched.pid").write_text(str(os.getpid())); time.sleep(120)', profile="standard", name="watched")
         wait_for(lambda: (work / "watched.pid").exists(), "watched startup")
         watched_pid = int((work / "watched.pid").read_text())
+        assert cli("wait", watched, "--timeout", "0").returncode == 124
+        os.kill(watched_pid, 0)
         unit = "jobwrap-job-{}.service".format(watched)
         shown = cli("show", watched).stdout
         assert b"launch:             detached (systemd user service " + unit.encode() in shown, shown
@@ -245,11 +253,29 @@ while True: time.sleep(1)
         unavailable = cli("run", "-d", "--", sys.executable, "-c", 'raise SystemExit(0)')
         assert unavailable.returncode != 0 and b"working systemd user manager" in unavailable.stderr, unavailable.stderr
         assert cli("list").stdout == before, "unavailable manager started a workload"
+        # Automatic daemon startup must escape the initiating agent too.
+        daemon.terminate(); daemon.wait(timeout=5)
+        daemon_fixture = dict(fixture)
+        daemon_fixture["argv"] = [os.fsencode(a).hex() for a in [str(CLI), "daemon", "start"]]
+        (work / "daemon-agent.json").write_text(json.dumps(daemon_fixture))
+        daemon_agent = (work / "launcher.py").read_text().replace("launcher.json", "daemon-agent.json").replace("launch-output", "daemon-agent-output").replace("launch-code", "daemon-agent-code")
+        (work / "daemon-agent.py").write_text(daemon_agent)
+        subprocess.run(["systemd-run", "--user", "--quiet", "--collect", "--service-type=exec", "--unit=" + daemon_launcher_unit, sys.executable, str(work / "daemon-agent.py")], check=True)
+        wait_for(lambda: (work / "daemon-agent-code").exists(), "independent daemon startup")
+        assert (work / "daemon-agent-code").read_text() == "0", (work / "daemon-agent-output").read_bytes()
+        subprocess.run(["systemctl", "--user", "kill", "--signal=SIGKILL", daemon_launcher_unit], check=True)
+        status = cli("daemon", "status").stdout
+        daemon_pid = int(re.search(rb"pid (\d+)", status).group(1))
+        assert "jobwrapd-" in Path("/proc/{}/cgroup".format(daemon_pid)).read_text()
+        assert cli("--json", "list").returncode == 0
+        print("PASS: automatically started daemon survives initiating agent cgroup SIGKILL")
         print("PASS: detached HTTP server survived agent cgroup SIGKILL; argv/environment/cwd, logs, signals, exit status, no-record, status alias, and invalid requests verified")
         print("PASS: detached workload survived daemon shutdown; missing manager failed without launching a fallback")
         print("PASS: service state, usage, and process snapshot reported across a daemon restart; older records adopted; an ended service settled as lost")
         print("Artifacts: " + str(work))
     finally:
+        cli("daemon", "stop")
+        subprocess.run(["systemctl", "--user", "stop", daemon_launcher_unit], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for job_id in job_ids:
             # Stop only this test's own service, including any failed fixture.
             subprocess.run(["systemctl", "--user", "stop", "jobwrap-job-" + job_id + ".service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

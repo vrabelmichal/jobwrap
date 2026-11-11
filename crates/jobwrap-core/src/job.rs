@@ -132,6 +132,8 @@ pub struct JobRecord {
     pub worker_identity: Option<String>,
     #[serde(default)]
     pub execution: crate::execution::ExecutionContext,
+    #[serde(default)]
+    pub monitoring: crate::execution::MonitoringMetadata,
 }
 
 /// The transient user service name `jobwrap run -d` uses for a job.

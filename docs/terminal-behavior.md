@@ -98,8 +98,9 @@ is unavailable, it warns before falling back to a session-dependent daemon.
 Explicit `jobwrap daemon start --foreground` remains attached.
 
 Workers drain the PTY into a private, bounded recovery journal independently of
-the daemon. The journal is capped at 512 MiB of framed data (including base64
-overhead), in addition to the normal terminal log. Once full, further output is
+the daemon. Recovery output is capped at 512 MiB of framed data per job (including base64
+overhead) and 4 GiB across recovery journals, in addition to the normal terminal
+logs. A bounded lifecycle reserve allows final results after output fills. Once full, further output is
 not recorded and truncation is reported. Final status remains recordable. Normal
 log pruning removes the matching journal. `--no-record` journals lifecycle
 metadata only; live output during an outage cannot be replayed in that mode.
@@ -151,3 +152,24 @@ cells per line. The raw recorded log remains available through the CLI/API,
 subject to recording limits. Programs must emit ANSI colors themselves;
 jobwrap does not override `NO_COLOR` or force a program's color policy.
 As with any PTY, stdout and stderr share one ordered terminal stream.
+
+## Opt-in reboot recovery for named servers
+
+`jobwrap server-unit --name review -- .venv/bin/python -m http.server 8080`
+prints a persistent systemd user service definition. It does not write a unit,
+enable it, or start a server. Review the definition and save it in your user
+unit directory, then use the enable command printed in its comments if desired.
+The definition runs foreground jobwrap inside the independent service, preserves
+selected Python/path activation settings, restarts on failure, and starts with
+the user manager after login/reboot. It deliberately omits arbitrary environment
+variables and credentials; configure required credentials separately.
+
+Use stable executable, environment and working-directory paths. A deleted
+worktree or unmounted data drive can still prevent startup. Boot without login
+requires the user's separately configured lingering policy. One-off detached
+computations retain their existing no-restart behavior. Each service invocation
+registers a new job; the historical results remain separate.
+
+`doctor JOB_ID` now includes the last observed wrapper contact/output times and
+recorded disconnection reason. These are observations, not an inference that a
+quiet workload is stuck or that socket EOF proves an external kill signal.

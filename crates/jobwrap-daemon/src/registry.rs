@@ -154,7 +154,17 @@ impl Registry {
                     )
                     .map_err(|e| e.to_string())?;
                     job.log = Some(log);
+                } else if let Some(log) = job.log.as_mut() {
+                    log.recover(
+                        job.record.log.bytes_written,
+                        job.record.log.truncated,
+                        self.log_limits(),
+                    )
+                    .map_err(|e| e.to_string())?;
                 }
+                job.record.monitoring.last_contact_at = Some(Utc::now());
+                job.record.monitoring.disconnected_at = None;
+                job.record.monitoring.disconnect_reason = None;
                 job.wrapper_tx = Some(wrapper_tx);
                 self.store
                     .lock()
@@ -207,6 +217,10 @@ impl Registry {
                 let mut execution = register.execution;
                 execution.daemon_build = Some(jobwrap_core::execution::BuildIdentity::current());
                 execution
+            },
+            monitoring: jobwrap_core::execution::MonitoringMetadata {
+                last_contact_at: Some(Utc::now()),
+                ..Default::default()
             },
             worker_identity: register.worker_identity,
             log: Default::default(),
@@ -546,6 +560,8 @@ impl Registry {
             return Ok(());
         }
         let previous = job.record.clone();
+        job.record.monitoring.last_contact_at = Some(Utc::now());
+        job.record.monitoring.last_output_at = Some(Utc::now());
         if let Some(log) = job.log.as_mut() {
             let requested = data.len() as u64;
             let global_limit = self.log_limits().maximum_total_bytes;
@@ -611,10 +627,14 @@ impl Registry {
     }
 
     /// Handle a wrapper state report (stopped/continued/exited/signaled).
-    pub fn handle_wrapper_event(&self, job_id: JobId, event: jobwrap_protocol::WrapperToDaemon) {
+    pub fn handle_wrapper_event(
+        &self,
+        job_id: JobId,
+        event: jobwrap_protocol::WrapperToDaemon,
+    ) -> Result<(), String> {
         let mut jobs = self.jobs.lock().expect("jobs lock");
         let Some(job) = jobs.get_mut(&job_id) else {
-            return;
+            return Err("unknown worker job".into());
         };
         let new_state = match event {
             jobwrap_protocol::WrapperToDaemon::Stopped => Some(JobState::Stopped),
@@ -629,13 +649,16 @@ impl Registry {
         };
         if let Some(state) = new_state {
             if let Ok(state) = job.record.state.transition(state) {
+                let previous = job.record.clone();
+                job.record.monitoring.last_contact_at = Some(Utc::now());
                 if state.is_finished() {
                     job.record.finished_at = Some(Utc::now());
                 }
                 job.record.state = state;
                 let store = self.store.lock().expect("store lock");
                 if let Err(error) = store.update_job(&job.record) {
-                    tracing::error!(%job_id, %error, "persisting wrapper state failed");
+                    job.record = previous;
+                    return Err(error.to_string());
                 }
                 if let Err(error) = store.insert_event(&Event::new(
                     job_id,
@@ -649,18 +672,33 @@ impl Registry {
                     .send(jobwrap_web::ServerEvent::StateChanged { job_id, state });
             }
         }
+        Ok(())
     }
 
     /// Mark a wrapper as disconnected but keep the job alive.
-    pub fn wrapper_disconnected(&self, job_id: JobId, reason: &str) {
+    pub fn wrapper_disconnected(
+        &self,
+        job_id: JobId,
+        connection: &mpsc::Sender<ToWrapper>,
+        reason: &str,
+    ) {
         let mut jobs = self.jobs.lock().expect("jobs lock");
         if let Some(job) = jobs.get_mut(&job_id) {
+            if job
+                .wrapper_tx
+                .as_ref()
+                .is_some_and(|tx| !tx.same_channel(connection))
+            {
+                return;
+            }
             job.wrapper_tx = None;
             if job.record.state.is_finished() || job.record.state == JobState::Disconnected {
                 return;
             }
             if let Ok(state) = job.record.state.transition(JobState::Disconnected) {
                 job.record.state = state;
+                job.record.monitoring.disconnected_at = Some(Utc::now());
+                job.record.monitoring.disconnect_reason = Some(reason.into());
                 let store = self.store.lock().expect("store lock");
                 if let Err(error) = store.update_job(&job.record) {
                     tracing::error!(%job_id, %error, "persisting wrapper disconnection failed");
@@ -1392,5 +1430,6 @@ pub fn summary_for(record: &JobRecord) -> JobSummary {
         visibility,
         service_unit: record.service_unit.clone(),
         execution: record.execution.clone(),
+        monitoring: record.monitoring.clone(),
     }
 }

@@ -33,3 +33,12 @@ pub struct ExecutionContext {
     pub launch_mode: Option<String>,
     pub python_environment: Option<PythonEnvironment>,
 }
+
+/// Observations from the wrapper connection, not inferred workload outcomes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonitoringMetadata {
+    pub last_contact_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_output_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub disconnected_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub disconnect_reason: Option<String>,
+}

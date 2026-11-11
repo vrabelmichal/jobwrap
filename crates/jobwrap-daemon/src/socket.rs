@@ -157,7 +157,7 @@ async fn handle_wrapper(
     let (ack_tx, mut ack_rx) = mpsc::channel::<()>(1);
 
     let job_id = register.id;
-    let registered = registry.register_job(register, wrapper_tx);
+    let registered = registry.register_job(*register, wrapper_tx.clone());
 
     let write_result = match &registered {
         Ok(reg) => write_response(&mut write, &DaemonToClient::Registered(reg.clone())).await,
@@ -173,6 +173,7 @@ async fn handle_wrapper(
         if registered.is_ok() {
             registry.wrapper_disconnected(
                 job_id,
+                &wrapper_tx,
                 "registration acknowledgement could not be delivered",
             );
         }
@@ -216,18 +217,33 @@ async fn handle_wrapper(
             }
             ClientToDaemon::WrapperRecordingTruncated => registry.recording_truncated(job_id),
             ClientToDaemon::WrapperStopped => {
-                registry.handle_wrapper_event(job_id, WrapperToDaemon::Stopped)
+                if let Err(error) = registry.handle_wrapper_event(job_id, WrapperToDaemon::Stopped)
+                {
+                    break error;
+                }
             }
             ClientToDaemon::WrapperContinued => {
-                registry.handle_wrapper_event(job_id, WrapperToDaemon::Continued)
+                if let Err(error) =
+                    registry.handle_wrapper_event(job_id, WrapperToDaemon::Continued)
+                {
+                    break error;
+                }
             }
             ClientToDaemon::WrapperExited { code } => {
-                registry.handle_wrapper_event(job_id, WrapperToDaemon::Exited { code });
+                if let Err(error) =
+                    registry.handle_wrapper_event(job_id, WrapperToDaemon::Exited { code })
+                {
+                    break error;
+                }
                 let _ = ack_tx.send(()).await;
                 break "child exit reported".to_owned();
             }
             ClientToDaemon::WrapperSignaled { signal } => {
-                registry.handle_wrapper_event(job_id, WrapperToDaemon::Signaled { signal });
+                if let Err(error) =
+                    registry.handle_wrapper_event(job_id, WrapperToDaemon::Signaled { signal })
+                {
+                    break error;
+                }
                 let _ = ack_tx.send(()).await;
                 break "child termination reported".to_owned();
             }
@@ -246,7 +262,7 @@ async fn handle_wrapper(
 
     drop(ack_tx);
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), writer_task).await;
-    registry.wrapper_disconnected(job_id, &disconnect_reason);
+    registry.wrapper_disconnected(job_id, &wrapper_tx, &disconnect_reason);
     Ok(())
 }
 
@@ -313,7 +329,7 @@ fn handle_cli_message(
                     .flatten();
                 match registry.get_job(owner, job_id) {
                     Ok(record) => DaemonToClient::JobDetail {
-                        job: Some(crate::registry::summary_for(&record)),
+                        job: Some(Box::new(crate::registry::summary_for(&record))),
                         service,
                     },
                     Err(_) => DaemonToClient::JobDetail {

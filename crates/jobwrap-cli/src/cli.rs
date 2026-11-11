@@ -29,6 +29,16 @@ pub enum Command {
     /// Run a command under jobwrap.
     #[command(name = "run")]
     Wrap(WrapArgs),
+    /// Print an opt-in persistent server unit; never installs or starts it.
+    #[command(trailing_var_arg = true)]
+    ServerUnit {
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "private")]
+        profile: String,
+        #[arg(required = true, num_args = 1.., allow_hyphen_values = true, trailing_var_arg = true)]
+        command: Vec<OsString>,
+    },
     /// List registered jobs.
     List,
     /// Show detailed information about one job (alias: status).

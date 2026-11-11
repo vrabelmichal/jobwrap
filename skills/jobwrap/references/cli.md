@@ -178,3 +178,8 @@ returns the child exit code (128 + signal for termination). It retries temporary
 monitoring loss, fails on an unknown/lost outcome, and exits 124 on timeout
 without stopping the workload. Add `--json` for its final structured detail.
 Closed stdout pipes are handled without a Rust panic.
+
+`jobwrap server-unit --name NAME -- COMMAND` prints an opt-in persistent server
+unit for review. It installs and starts nothing. Use stable paths and review
+its restart policy and environment allowlist before enabling it. This is for
+named servers; ordinary detached computations do not restart after reboot.

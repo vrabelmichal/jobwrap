@@ -315,6 +315,7 @@ mod tests {
             visibility: "public".to_string(),
             service_unit: None,
             execution: Default::default(),
+            monitoring: Default::default(),
         }
     }
 

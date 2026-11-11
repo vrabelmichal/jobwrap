@@ -547,6 +547,7 @@ mod tests {
             service_unit: None,
             worker_identity: None,
             execution: Default::default(),
+            monitoring: Default::default(),
         }
     }
 
