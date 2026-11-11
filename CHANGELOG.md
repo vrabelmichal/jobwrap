@@ -4,7 +4,26 @@ All notable changes to jobwrap are documented in this file.
 
 ## [Unreleased]
 
+The development workspace is versioned `0.4.0-dev`; this is not a published release.
+Both binaries must be upgraded together for the new wire protocol.
+
 ### Added
+
+- Identity-checked worker reconnection and bounded private recovery journals.
+  Recorded output and final results survive daemon outages; completed journals
+  are recovered even after worker exit. Auto-started daemons use independent
+  transient user services when available, escaping launching-agent cleanup.
+- Structured CLI output for list/show/doctor/wait and detached launch receipts;
+  confirmed-result waiting with exit/signal propagation and explicit timeout.
+- Python launch environment detection for venv, conda and uv, with permission-
+  aware environment details, search and filtering, and historical worker/daemon
+  build provenance. No arbitrary environment variables are persisted.
+- Safe ANSI color/attribute rendering and progress-line updates in the web log
+  viewer, streaming UTF-8, complete paged history, byte-offset overlap removal
+  and automatic browser reconnection.
+- Observed wrapper-contact/output timestamps and disconnect reasons, plus an
+  opt-in `server-unit` generator for reviewable persistent named-server units.
+  Generation does not install, enable or start services.
 
 - Browser tab titles and page headers identify the machine serving the jobwrap
   interface. `GET /api/v1/server` also reports the hostname.
@@ -50,6 +69,13 @@ All notable changes to jobwrap are documented in this file.
   `not running` (exit 0) when no daemon is up, instead of failing.
 
 ### Fixed
+
+- Closed stdout pipes no longer panic in CLI output. Output log appends seek
+  to EOF, recovery restores committed boundaries, and stale connection cleanup
+  cannot clear a newly connected worker's control channel.
+- Stop/restart can upgrade an incompatible daemon using its kernel-verified
+  private-socket peer PID, without trusting stale PID files or wire responses.
+- Build identity tracking follows actual Git metadata paths in linked worktrees.
 
 - Debian package metadata now names the package `jobwrap` and includes both
   executables. Shell completions include current subcommands and daemon options;

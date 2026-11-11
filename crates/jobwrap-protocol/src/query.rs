@@ -63,6 +63,9 @@ pub struct JobQuery {
     /// Case-insensitive substring over name, profile, ID, PIDs, and state.
     #[serde(default)]
     pub text: Option<String>,
+    /// Substring over the visible Python launch environment kind, name or path.
+    #[serde(default)]
+    pub environment: Option<String>,
     /// Inclusive lower bound on the start time.
     #[serde(default)]
     pub started_after: Option<DateTime<Utc>>,
@@ -146,13 +149,19 @@ fn matches_text(job: &JobSummary, needle: &str) -> bool {
     }
     haystack.push(' ');
     haystack.push_str(&job.visibility);
+    if let Some(env) = &job.execution.python_environment {
+        haystack.push_str(&format!(" {} {} {}", env.kind, env.name, env.path));
+    }
     haystack.to_lowercase().contains(needle)
 }
 
 impl JobQuery {
     /// Whether any filter that narrows the list is set.
     pub fn is_filtered(&self) -> bool {
-        self.state != StateGroup::All
+        self.environment
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+            || self.state != StateGroup::All
             || self
                 .text
                 .as_deref()
@@ -165,6 +174,24 @@ impl JobQuery {
     }
 
     fn matches_time_and_text(&self, job: &JobSummary) -> bool {
+        if let Some(filter) = self
+            .environment
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let text = job
+                .execution
+                .python_environment
+                .as_ref()
+                .map(|env| format!("{} {} {}", env.kind, env.name, env.path).to_lowercase());
+            if !text
+                .as_ref()
+                .is_some_and(|text| text.contains(&filter.to_lowercase()))
+            {
+                return false;
+            }
+        }
         if !in_range(job.started_at, self.started_after, self.started_before) {
             return false;
         }
@@ -287,6 +314,8 @@ mod tests {
             log_truncated: false,
             visibility: "public".to_string(),
             service_unit: None,
+            execution: Default::default(),
+            monitoring: Default::default(),
         }
     }
 
@@ -449,5 +478,31 @@ mod tests {
         );
         assert!(parse_time_bound("yesterday", false).is_err());
         assert!(StateGroup::parse("done").is_err());
+    }
+    #[test]
+    fn environments_filter_and_search_before_paging() {
+        let mut science = job("worker", JobState::Running, "2026-11-01", None);
+        science.execution.python_environment = Some(jobwrap_core::execution::PythonEnvironment {
+            kind: "uv".into(),
+            name: "science".into(),
+            path: "/project/.venv".into(),
+            interpreter: None,
+            evidence: "launch".into(),
+        });
+        let unknown = job("other", JobState::Running, "2026-11-01", None);
+        for query in [
+            JobQuery {
+                environment: Some("SCIENCE".into()),
+                ..Default::default()
+            },
+            JobQuery {
+                text: Some(".venv".into()),
+                ..Default::default()
+            },
+        ] {
+            let page = query.apply(vec![science.clone(), unknown.clone()]);
+            assert_eq!(page.total, 1);
+            assert_eq!(page.jobs[0].id, science.id);
+        }
     }
 }

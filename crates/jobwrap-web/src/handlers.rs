@@ -591,13 +591,12 @@ async fn ws_loop(
         tokio::select! {
             frame = rx.recv() => {
                 let event = match frame {
-                    Ok(ServerEvent::Output { job_id: jid, sequence, data }) if jid == job_id => {
-                        Message::Text(format!(
-                            "{{\"type\":\"output\",\"job_id\":\"{}\",\"sequence\":{},\"data_base64\":\"{}\"}}",
-                            jid,
-                            sequence,
-                            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data)
-                        ))
+                    Ok(ServerEvent::Output { job_id: jid, sequence, byte_offset, data }) if jid == job_id => {
+                        Message::Text(json!({
+                            "type": "output", "job_id": jid, "sequence": sequence,
+                            "byte_offset": byte_offset,
+                            "data_base64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
+                        }).to_string())
                     }
                     Ok(ServerEvent::StateChanged { job_id: jid, state }) if jid == job_id => {
                         let state_json = serde_json::to_string(&state).unwrap_or_else(|_| "{}".into());
@@ -606,6 +605,7 @@ async fn ws_loop(
                             jid, state_json
                         ))
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => Message::Text("{\"type\":\"resync\"}".into()),
                     _ => continue,
                 };
                 if socket.send(event).await.is_err() {

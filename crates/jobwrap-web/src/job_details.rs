@@ -108,6 +108,14 @@ fn details_response(
             "truncated": record.log.truncated,
         },
         "process": process,
+        "monitoring": record.monitoring,
+        "execution": {
+            "worker_build": record.execution.worker_build,
+            "daemon_build": record.execution.daemon_build,
+            "host": record.execution.host,
+            "launch_mode": record.execution.launch_mode,
+            "python_environment": if view_working_directory { record.execution.python_environment.as_ref() } else { None },
+        },
         "service_unit": record.service_unit,
         "service": service,
         "permissions": {

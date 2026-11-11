@@ -41,9 +41,9 @@ Detached jobs survive terminal/agent process and cgroup teardown. They require
 by explicit control, manager shutdown, logout policy, or reboot. No automatic
 workload restart or boot persistence is configured.
 
-Detached workers survive daemon shutdown. The current protocol cannot reconnect
-or adopt them, so a restarted daemon marks their records disconnected and the
-user service must be inspected/stopped directly. This limit is documented.
+The original 0.2 protocol could not reconnect workers. Protocol v2 supersedes
+that limitation with identity-checked reconnection and durable output/result
+recovery; adopting a child whose PTY-owning wrapper died remains unsupported.
 
 The CLI syntax change is intentional and ships in 0.2.0. Documentation, skills,
 manpages, shell completions, and user-facing guidance must use `run` explicitly.

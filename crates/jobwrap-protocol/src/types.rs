@@ -29,6 +29,10 @@ pub struct JobSummary {
     /// The systemd user service of a detached job.
     #[serde(default)]
     pub service_unit: Option<String>,
+    #[serde(default)]
+    pub execution: jobwrap_core::execution::ExecutionContext,
+    #[serde(default)]
+    pub monitoring: jobwrap_core::execution::MonitoringMetadata,
 }
 
 /// What the systemd user manager reports about a detached job's service.
@@ -113,7 +117,7 @@ impl ServiceUnitStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputSlice {
     pub job_id: JobId,
-    /// Sequence number of the first frame in this slice.
+    /// Starting byte offset (the historical field name is retained).
     pub sequence_start: u64,
     /// Base64-encoded terminal bytes.
     pub data_base64: String,

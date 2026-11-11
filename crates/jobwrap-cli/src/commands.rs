@@ -19,7 +19,17 @@ pub fn dispatch(command: Command) -> anyhow::Result<()> {
             let code = run(args).context("jobwrap wrapper failed")?;
             std::process::exit(code);
         }
+        Command::ServerUnit {
+            name,
+            profile,
+            command,
+        } => {
+            println!("{}", crate::server_unit::render(&name, &profile, &command)?);
+            Ok(())
+        }
         Command::List => list(),
+        Command::Wait { job, timeout } => wait(&job, timeout, false),
+        Command::Doctor { job } => diagnose(&job, false),
         Command::Show { job } => show(&job),
         Command::Logs { job, offset } => logs(&job, offset),
         Command::Attach { job } => attach(&job),
@@ -75,6 +85,7 @@ fn ensure_ok(response: DaemonToClient) -> anyhow::Result<()> {
 
 fn tag(msg: &DaemonToClient) -> &'static str {
     match msg {
+        DaemonToClient::WrapperAck => "wrapper_ack",
         DaemonToClient::HelloAck { .. } => "hello_ack",
         DaemonToClient::Registered { .. } => "registered",
         DaemonToClient::JobList { .. } => "job_list",
@@ -140,6 +151,24 @@ fn show(job: &str) -> anyhow::Result<()> {
                     println!("finished:           {}", finished.to_rfc3339());
                 }
                 println!("output bytes:       {}", job.output_bytes);
+                if let Some(env) = &job.execution.python_environment {
+                    println!(
+                        "python environment: {} · {} ({})",
+                        env.kind, env.path, env.evidence
+                    );
+                }
+                if let Some(build) = &job.execution.worker_build {
+                    println!(
+                        "worker build:       {} {} (dirty: {})",
+                        build.version, build.commit, build.dirty
+                    );
+                }
+                if let Some(build) = &job.execution.daemon_build {
+                    println!(
+                        "registered daemon:  {} {} (dirty: {})",
+                        build.version, build.commit, build.dirty
+                    );
+                }
                 println!(
                     "terminal:           {}",
                     if job.terminal.attached {
@@ -329,6 +358,12 @@ fn daemon(action: DaemonCommand) -> anyhow::Result<()> {
                 println!("running (pid {})", client.daemon_pid);
                 Ok(())
             }
+            Err(crate::daemon::ClientError::VersionRejected) => {
+                if let Some(pid) = crate::daemon::daemon_peer_pid(&paths)? {
+                    println!("running (pid {pid}); incompatible protocol, use `jobwrap daemon restart` after upgrading both binaries");
+                }
+                Ok(())
+            }
             Err(_) => {
                 println!("not running");
                 Ok(())
@@ -374,10 +409,9 @@ fn start_and_report(paths: &jobwrap_config::RuntimePaths) -> anyhow::Result<()> 
 /// comes from a verified live socket connection; a stale pid file must never
 /// be allowed to signal an unrelated process.
 fn stop_daemon(paths: &jobwrap_config::RuntimePaths) -> anyhow::Result<Option<i32>> {
-    let Ok(client) = DaemonClient::connect(paths, false) else {
+    let Some(pid) = crate::daemon::daemon_peer_pid(paths)? else {
         return Ok(None);
     };
-    let pid = client.daemon_pid;
     nix::sys::signal::kill(
         nix::unistd::Pid::from_raw(pid),
         nix::sys::signal::Signal::SIGTERM,
@@ -960,3 +994,113 @@ restart = "owner"
 delete = "owner"
 launch = "owner"
 "#;
+
+/// JSON errors remain on stderr with nonzero exit status; stdout contains only
+/// complete structured results, never launch banners or workload terminal data.
+pub fn dispatch_json(command: Command) -> anyhow::Result<()> {
+    match command {
+        Command::List => with_client(|client| match client.request(ClientToDaemon::ListJobs)? {
+            DaemonToClient::JobList { jobs } => {
+                println!("{}", serde_json::to_string(&jobs)?);
+                Ok(())
+            }
+            DaemonToClient::Error { message, .. } => bail!("{message}"),
+            _ => bail!("unexpected list response"),
+        }),
+        Command::Show { job } => {
+            println!("{}", serde_json::to_string(&job_detail(&job)?)?);
+            Ok(())
+        }
+        Command::Doctor { job } => diagnose(&job, true),
+        Command::Wait { job, timeout } => wait(&job, timeout, true),
+        Command::Wrap(mut args) if args.detach => {
+            args.json = true;
+            dispatch(Command::Wrap(args))
+        }
+        _ => bail!("--json supports list, show/status, doctor, wait and run --detach"),
+    }
+}
+fn job_detail(job: &str) -> anyhow::Result<DaemonToClient> {
+    let job_id = parse_job_id(job)?;
+    with_client(
+        |client| match client.request(ClientToDaemon::ShowJob { job_id })? {
+            detail @ DaemonToClient::JobDetail { job: Some(_), .. } => Ok(detail),
+            DaemonToClient::Error { message, .. } => bail!("{message}"),
+            _ => bail!("job {job_id} not found"),
+        },
+    )
+}
+fn wait(job: &str, timeout: u64, json: bool) -> anyhow::Result<()> {
+    parse_job_id(job)?;
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(timeout.min(365 * 86400));
+    loop {
+        let detail = match job_detail(job) {
+            Ok(detail) => Some(detail),
+            Err(error)
+                if error
+                    .chain()
+                    .any(|e| e.downcast_ref::<crate::daemon::ClientError>().is_some()) =>
+            {
+                None
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(detail @ DaemonToClient::JobDetail { job: Some(_), .. }) = detail {
+            let DaemonToClient::JobDetail {
+                job: Some(ref summary),
+                ..
+            } = detail
+            else {
+                unreachable!()
+            };
+            let code = match summary.state {
+                jobwrap_core::JobState::Exited { code } => Some(code),
+                jobwrap_core::JobState::Signaled { signal } => {
+                    Some(128 + signal.name().parse::<nix::sys::signal::Signal>()? as i32)
+                }
+                jobwrap_core::JobState::Lost => bail!("job outcome is unknown (lost)"),
+                _ => None,
+            };
+            if let Some(code) = code {
+                if json {
+                    println!("{}", serde_json::to_string(&detail)?);
+                } else {
+                    println!("{}: {}", summary.id, summary.state.describe());
+                }
+                std::process::exit(code);
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            eprintln!("jobwrap: timed out waiting for a confirmed result; job was not stopped");
+            std::process::exit(124);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+fn diagnose(job: &str, json: bool) -> anyhow::Result<()> {
+    let detail = job_detail(job)?;
+    let DaemonToClient::JobDetail {
+        job: Some(ref summary),
+        ref service,
+    } = detail
+    else {
+        unreachable!()
+    };
+    let connected = summary.state.is_controllable();
+    let information = serde_json::json!({
+        "job": summary, "service": service,
+        "monitoring_connected": connected,
+        "control_available": connected,
+        "workload_liveness": if connected { "observed" } else if service.as_ref().is_some_and(|s| s.is_running()) { "service_running" } else { "unconfirmed" },
+        "recording_truncated": summary.log_truncated,
+        "signal_scope": "workload process group; systemd service stop includes all service descendants",
+        "recovery": if connected { "Monitoring is connected. Check application readiness separately." } else { "New workers reconnect automatically. For legacy jobs inspect the named user service; do not relaunch solely because monitoring is disconnected." },
+    });
+    if json {
+        println!("{}", information);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&information)?);
+    }
+    Ok(())
+}

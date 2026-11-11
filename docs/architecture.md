@@ -75,13 +75,13 @@ The service manager owns and reaps the worker. The original agent's process or
 cgroup teardown cannot kill that independent service. No double-fork or
 foreground fallback is used when the user manager is unavailable.
 
-The worker and workload survive daemon shutdown, but the existing socket
-protocol does not reconnect/adopt them. A restarted daemon reports those records
-as disconnected; use the named user service to inspect or stop the workload.
-The daemon asks the user manager (`systemctl --user show`, read-only) about
-such records at startup, every 30 seconds, and when a job is shown: a running
-service is reported as alive, and an ended one settles the record as `lost`.
-An unreachable manager changes nothing.
+New protocol-v2 workers reconnect after daemon restart and replay recorded
+output by acknowledged sequence, restoring input and signal control. A private,
+bounded recovery journal also preserves completed results after worker exit.
+Upgrade both binaries together; existing old workers keep their old behavior.
+Use `jobwrap show JOB_ID` to inspect status and the named systemd service.
+A disconnected record alone does not establish workload failure. See
+[terminal behavior](terminal-behavior.md) for recording limits and recovery.
 
 ## Process identities
 

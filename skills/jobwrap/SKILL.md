@@ -63,14 +63,14 @@ These references ship with the skill and do not require the source repository.
 - `--detach` preserves the caller environment and cwd, supports `--no-record`,
   and conflicts with `--no-web`. Keep the workload's files available; detaching
   does not preserve a temporary report directory or agent worktree from cleanup.
-- Detached services survive daemon shutdown, but wrapper reconnection is not
-  implemented. A restarted daemon marks their records `disconnected`; recording
-  and control through it cease. `jobwrap show JOB_ID` then reports the
-  service state from systemd (`service: active (running)` means still alive);
-  a record whose service has ended becomes `lost`. Inspect the named service with `systemctl --user
-  status` or `journalctl --user -u`; stop it with `systemctl --user stop` only
-  when the task authorizes termination. User-manager shutdown, logout policies,
-  reboot, and explicit stops can end jobs; detaching is not boot persistence.
+- New protocol-v2 workers reconnect after daemon restart and replay bounded
+  recorded output. Both CLI and daemon must be upgraded; older workers retain
+  their old behavior. A private recovery journal also preserves final results
+  for daemon recovery after worker exit. `--no-record` does not replay output.
+  Status is uncertain while disconnected: do not restart a workload merely to
+  restore its display. Inspect its service and wait for reconnection.
+  User-manager shutdown, logout policies, reboot and explicit service stops can
+  end jobs; detaching is not boot persistence.
 - `attach` and `logs -f` are not implemented. HTTP API
   launch is experimental, disabled by default, and only supports an explicitly
   enabled new-terminal path. Do not enable launch or weaken access settings just

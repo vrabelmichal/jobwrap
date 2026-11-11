@@ -26,6 +26,7 @@ pub const DEFAULT_RECENT_DAYS: u32 = 7;
 pub struct ListParams {
     state: Option<String>,
     q: Option<String>,
+    environment: Option<String>,
     started_after: Option<String>,
     started_before: Option<String>,
     finished_after: Option<String>,
@@ -80,6 +81,7 @@ impl ListParams {
         let query = JobQuery {
             state: StateGroup::parse(self.state.as_deref().unwrap_or("").trim())
                 .map_err(ApiError::bad_request)?,
+            environment: self.environment.filter(|s| !s.trim().is_empty()),
             text: self.q.filter(|text| !text.trim().is_empty()),
             started_after: bound(self.started_after.as_deref(), "started_after", false)?,
             started_before: bound(self.started_before.as_deref(), "started_before", true)?,

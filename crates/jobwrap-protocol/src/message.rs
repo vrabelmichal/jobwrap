@@ -12,7 +12,7 @@ use jobwrap_core::{JobId, JobState, Signal, WindowSize};
 use super::types::{HelpProbeRequest, JobSummary};
 
 /// The version of the wire protocol.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// The role of the peer that opened a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +73,7 @@ pub enum ClientToDaemon {
 
     // Wrapper lifecycle/state reports (flat variants so the nested enums do
     // not collide on the `type` tag).
+    WrapperRecordingTruncated,
     WrapperReady,
     WrapperStopped,
     WrapperContinued,
@@ -98,7 +99,7 @@ pub enum ClientToDaemon {
     },
 
     // Wrapper registration and lifecycle.
-    RegisterJob(RegisterJob),
+    RegisterJob(Box<RegisterJob>),
 
     // Launch process from API / web / CLI (privileged).
     LaunchJob(LaunchRequest),
@@ -157,7 +158,8 @@ pub struct TokenCreateRequest {
 
 /// Caller context for a detached local job. Native strings are byte arrays so
 /// non-UTF-8 Linux paths, arguments, and environment values survive unchanged.
-/// Environment values stay in memory and are never written to job metadata.
+/// The full payload stays in memory; only allowlisted launch context (such as
+/// a Python environment path) is recorded separately as job metadata.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetachedRequest {
     pub command: Vec<Vec<u8>>,
@@ -221,6 +223,10 @@ pub struct RegisterJob {
     pub terminal_attached: bool,
     pub terminal_size: Option<WindowSize>,
     pub terminal_device: Option<String>,
+    #[serde(default)]
+    pub worker_identity: Option<String>,
+    #[serde(default)]
+    pub execution: jobwrap_core::execution::ExecutionContext,
 }
 
 /// Wrapper-to-daemon messages sent after registration.
@@ -254,6 +260,8 @@ pub struct RegisterResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonToClient {
+    /// Acknowledgement of a durably handled wrapper message.
+    WrapperAck,
     /// Acknowledgment of the client's Hello.
     HelloAck {
         protocol_version: u32,
@@ -267,7 +275,7 @@ pub enum DaemonToClient {
         jobs: Vec<JobSummary>,
     },
     JobDetail {
-        job: Option<JobSummary>,
+        job: Option<Box<JobSummary>>,
         /// Live systemd state for a detached job; absent from older daemons.
         #[serde(default)]
         service: Option<super::types::ServiceUnitStatus>,

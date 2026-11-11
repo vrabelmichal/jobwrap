@@ -72,13 +72,14 @@ that it is ready. A successful detached launch confirms registration, not
 application readiness or eventual success. Use `jobwrap stop JOB_ID` to request
 termination, then check its final state.
 
-Detached services survive a jobwrap daemon restart, but wrapper reconnection
-is not implemented: those records become `disconnected` (`jobwrap show` still
-reports whether the systemd service runs, and an ended service becomes
-`lost`), and recording/control
-through the restarted daemon are unavailable. Inspect the service with
-`systemctl --user status jobwrap-job-JOB_ID.service`; use
-`systemctl --user stop jobwrap-job-JOB_ID.service` to stop it if necessary.
+New protocol-v2 workers reconnect after daemon restart and replay recorded
+output by acknowledged sequence, restoring input and signal control. A private,
+bounded recovery journal also preserves completed results after worker exit.
+Upgrade both binaries together; existing old workers keep their old behavior.
+Use `jobwrap show JOB_ID` to inspect status and the named systemd service.
+A disconnected record alone does not establish workload failure. See
+[terminal behavior](docs/terminal-behavior.md) for recording limits and recovery.
+
 User-manager shutdown, logout policies, reboot, or an explicit service stop can
 still terminate it. Detached mode is not automatic restart or boot persistence.
 

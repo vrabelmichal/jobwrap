@@ -124,7 +124,8 @@ pub fn index_page(page_json: &str, can_prune: bool, prune: crate::WebPrune) -> S
       </div>
       <button id="refresh-jobs" type="button" class="secondary-button">Refresh</button>
     </div>
-    <div class="jobs-filters" role="group" aria-label="Date filters">
+    <div class="jobs-filters" role="group" aria-label="Job filters">
+      <label for="job-environment">Python environment<input id="job-environment" type="search" placeholder="venv, conda, uv, name or path" autocomplete="off"></label>
       <fieldset class="date-range">
         <legend>Started</legend>
         <label>from <input id="started-from" type="date"></label>
@@ -196,7 +197,7 @@ pub fn job_page(record: &JobRecord) -> String {
 </header>
 <main id="job-details" class="job-main" data-job="{}">
   <p id="wrapper-status-note" class="muted" hidden>The wrapper connection is lost. The workload may still be running; its exit status is unknown. Live output and control are unavailable. Check the workload's own log before considering a restart.</p>
-  <p id="detached-running-note" class="muted" hidden>The daemon lost contact with this detached job, but its systemd user service is still running. Live output and control through jobwrap are unavailable; use the service commands below to inspect or stop it.</p>
+  <p id="detached-running-note" class="muted" hidden>The daemon lost contact with this detached job, but its systemd user service is still running. New workers reconnect automatically. Older workers may require the service commands below for inspection or termination.</p>
   <div class="details-layout">
     <section class="card overview-card">
       <div class="section-heading">
@@ -277,6 +278,9 @@ pub fn job_page(record: &JobRecord) -> String {
       <pre id="job-command" class="command-block">Loading…</pre>
       <div class="command-meta">
         <div><span class="field-label">Executable</span><code id="job-executable">—</code></div>
+        <div><span class="field-label">Python launch environment</span><code id="job-environment-info">—</code></div>
+        <div><span class="field-label">Worker build</span><code id="job-worker-build">—</code></div>
+        <div><span class="field-label">Daemon build at registration</span><code id="job-daemon-build">—</code></div>
         <div><span class="field-label">Launch working directory</span><code id="job-working-directory">—</code></div>
       </div>
     </section>
@@ -291,6 +295,10 @@ pub fn job_page(record: &JobRecord) -> String {
       </div>
       <pre id="terminal" class="terminal" data-job="{}"></pre>
       <div class="terminal-meta">
+        <span>ANSI colors · merged stdout/stderr</span>
+        <span>Last wrapper report: <strong id="last-contact">—</strong></span>
+        <span>Last received output: <strong id="last-output">—</strong></span>
+        <span id="disconnect-detail" hidden></span>
         <span>Recorded: <strong id="log-size">—</strong></span>
         <span id="log-truncated" hidden>recording truncated at configured limit</span>
         <span>Terminal: <strong id="terminal-attached">—</strong></span>
