@@ -278,3 +278,75 @@ test('Python environment filters round-trip through dashboard and API URLs', () 
   assert.match(context.apiQuery, /environment=science/);
   assert.match(context.addressQuery, /environment=science/);
 });
+
+function terminalContext(extra = {}) {
+  const context = {
+    document: { getElementById: () => null, querySelectorAll: () => [] },
+    window: { location: { pathname: '/' } },
+    fetch: async () => ({ ok: true, json: async () => ({}) }),
+    URLSearchParams, TextDecoder, ...extra,
+  };
+  vm.runInNewContext(source, context);
+  return context;
+}
+
+test('terminal renders split ANSI colors, RGB, attributes and escaped text safely', () => {
+  const page = terminalContext();
+  const renderer = page.createTerminalRenderer();
+  renderer.append('\x1b[3'); renderer.append('1;1mred<&\x1b[0m plain\n');
+  renderer.append('\x1b[38;5;196mindexed\x1b[48;2;1;2;3m background');
+  const html = renderer.html();
+  assert.match(html, /color:#e06c75;font-weight:700/);
+  assert.match(html, /red&lt;&amp;<\/span> plain/);
+  assert.match(html, /color:rgb\(255,0,0\)/);
+  assert.match(html, /background-color:rgb\(1,2,3\)/);
+  renderer.append('\x1b]8;;javascript:alert(1)\x07link\x1b]8;;\x07');
+  assert.doesNotMatch(renderer.html(), /javascript:|<a |<script/);
+});
+
+test('terminal handles progress updates, backspace, split UTF-8 and bounded lines', () => {
+  const page = terminalContext();
+  const renderer = page.createTerminalRenderer();
+  renderer.append('progress 100%\r50%\x1b[K\nabc\bD');
+  assert.equal(renderer.html(), '50%\nabD');
+  const node = { innerHTML: '', scrollHeight: 1 };
+  const bytes = new TextEncoder().encode('é🪐');
+  for (const byte of bytes) page.appendBytes(node, new Uint8Array([byte]));
+  assert.equal(node.innerHTML, 'é🪐');
+  const bounded = page.createTerminalRenderer(); bounded.append('x'.repeat(100000));
+  assert.equal(bounded.html().length, 16384);
+});
+
+test('browser pages history beyond 1 MiB, deduplicates live bytes and catches up after reconnect', async () => {
+  const node = { innerHTML: '', scrollHeight: 1 };
+  const sockets = [], urls = [], timers = [];
+  let historyRequests = 0;
+  class Socket {
+    constructor() { this.readyState = 1; sockets.push(this); }
+    close() { this.readyState = 3; this.onclose(); }
+  }
+  const page = terminalContext({
+    document: { getElementById: (id) => id === 'terminal' ? node : null, querySelectorAll: () => [] },
+    window: { location: { pathname: '/', protocol: 'http:', host: 'localhost' }, setTimeout: (fn) => timers.push(fn) },
+    WebSocket: Socket,
+    atob: (text) => Buffer.from(text, 'base64').toString('binary'),
+    fetch: async (url) => {
+      urls.push(url); historyRequests++;
+      const text = historyRequests === 1 ? 'a'.repeat(1024 * 1024) : historyRequests === 2 ? '\nend' : ' recovered';
+      return { ok: true, json: async () => ({ data_base64: Buffer.from(text).toString('base64') }) };
+    },
+  });
+  await page.connectTerminal('fixture');
+  sockets[0].onopen();
+  await vm.runInContext('terminalConnections.get(document.getElementById("terminal")).queue', vm.createContext(page));
+  assert.match(urls[1], /from=1048576$/);
+  assert.match(node.innerHTML, /\nend$/);
+  sockets[0].onmessage({ data: JSON.stringify({ type: 'output', byte_offset: 1048576, data_base64: Buffer.from('\nend').toString('base64') }) });
+  await vm.runInContext('terminalConnections.get(document.getElementById("terminal")).queue', page);
+  assert.equal((node.innerHTML.match(/end/g) || []).length, 1);
+  sockets[0].close(); assert.equal(timers.length, 1);
+  await timers[0](); sockets[1].onopen();
+  await vm.runInContext('terminalConnections.get(document.getElementById("terminal")).queue', page);
+  assert.match(urls[2], /from=1048580$/);
+  assert.match(node.innerHTML, /end recovered$/);
+});

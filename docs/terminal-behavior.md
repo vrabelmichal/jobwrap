@@ -133,3 +133,21 @@ channel. A surviving child can still be observed through its own log and Linux
 process information. Do not relaunch a workload solely because its jobwrap
 record is disconnected, and do not send signals to saved PIDs without verifying
 their current identity.
+
+## Browser output
+
+The browser renders ANSI SGR foreground/background colors (16-color, 256-color
+and RGB), bold, dim, italic, underline, reverse and strike-through. It handles
+common line-editing sequences, carriage returns and backspaces for progress
+output. UTF-8 and escape sequences may cross network-frame boundaries. Workload
+text is escaped; OSC titles, hyperlinks and other terminal side effects are not
+executed. This is a log viewer, not a full-screen terminal emulator.
+
+The browser subscribes before catching up recorded history, reads all history
+pages by byte offset, and reconnects with backoff. Stored byte offsets remove
+overlap between live and history output; a lagged broadcast requests catch-up.
+The visible scrollback is bounded to about 2 MiB of rendered markup and 16,384
+cells per line. The raw recorded log remains available through the CLI/API,
+subject to recording limits. Programs must emit ANSI colors themselves;
+jobwrap does not override `NO_COLOR` or force a program's color policy.
+As with any PTY, stdout and stderr share one ordered terminal stream.

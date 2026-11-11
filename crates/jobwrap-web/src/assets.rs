@@ -295,6 +295,7 @@ pub fn job_page(record: &JobRecord) -> String {
       </div>
       <pre id="terminal" class="terminal" data-job="{}"></pre>
       <div class="terminal-meta">
+        <span>ANSI colors · merged stdout/stderr</span>
         <span>Recorded: <strong id="log-size">—</strong></span>
         <span id="log-truncated" hidden>recording truncated at configured limit</span>
         <span>Terminal: <strong id="terminal-attached">—</strong></span>

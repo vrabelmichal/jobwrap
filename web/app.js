@@ -8,13 +8,119 @@ function b64decode(b64) {
   return bytes;
 }
 
+// SGR colors and common line editing, with no HTML/URL interpretation from
+// workload output. Parser/UTF-8 state survives arbitrary transport boundaries.
+function createTerminalRenderer() {
+  const palette = ['#1b1d23','#e06c75','#98c379','#e5c07b','#61afef','#c678dd','#56b6c2','#abb2bf',
+    '#5c6370','#ff7a85','#b5e890','#ffd68a','#82c7ff','#e29bff','#7de0e8','#ffffff'];
+  let style = {}, cells = [], column = 0, mode = '', escape = '', oscEscape = false;
+  const history = [];
+  let historySize = 0;
+  function color(index) {
+    if (index < 16) return palette[index];
+    if (index >= 232) { const level = 8 + (index - 232) * 10; return `rgb(${level},${level},${level})`; }
+    const n = index - 16, levels = [0,95,135,175,215,255];
+    return `rgb(${levels[Math.floor(n / 36)]},${levels[Math.floor(n / 6) % 6]},${levels[n % 6]})`;
+  }
+  function css() {
+    const fg = style.reverse ? (style.bg || '#abb2bf') : style.fg;
+    const bg = style.reverse ? (style.fg || '#1b1d23') : style.bg;
+    return [fg && `color:${fg}`, bg && `background-color:${bg}`, style.bold && 'font-weight:700',
+      style.dim && 'opacity:0.65', style.italic && 'font-style:italic',
+      (style.underline || style.strike) && `text-decoration:${style.underline ? 'underline ' : ''}${style.strike ? 'line-through' : ''}`].filter(Boolean).join(';');
+  }
+  function lineHtml() {
+    let result = '', active = null, text = '';
+    function flush() { if (text) result += active ? `<span style="${active}">${escapeHtml(text)}</span>` : escapeHtml(text); text = ''; }
+    for (const cell of cells) {
+      const next = cell ? cell.style : '';
+      if (active !== next) { flush(); active = next; }
+      text += cell ? cell.text : ' ';
+    }
+    flush(); return result;
+  }
+  function put(text) {
+    if (column >= 16384) return; // Bound hostile lines and cursor movement.
+    cells[column++] = { text, style: css() };
+  }
+  function sgr(raw) {
+    const codes = raw === '' ? [0] : raw.split(';').map(Number);
+    for (let i = 0; i < codes.length; i++) {
+      const n = codes[i];
+      if (n === 0) style = {};
+      else if (n === 1) style.bold = true;
+      else if (n === 2) style.dim = true;
+      else if (n === 3) style.italic = true;
+      else if (n === 4) style.underline = true;
+      else if (n === 7) style.reverse = true;
+      else if (n === 9) style.strike = true;
+      else if (n === 22) { style.bold = false; style.dim = false; }
+      else if (n === 23) style.italic = false;
+      else if (n === 24) style.underline = false;
+      else if (n === 27) style.reverse = false;
+      else if (n === 29) style.strike = false;
+      else if (n === 39) delete style.fg;
+      else if (n === 49) delete style.bg;
+      else if (n >= 30 && n <= 37) style.fg = color(n - 30);
+      else if (n >= 90 && n <= 97) style.fg = color(n - 90 + 8);
+      else if (n >= 40 && n <= 47) style.bg = color(n - 40);
+      else if (n >= 100 && n <= 107) style.bg = color(n - 100 + 8);
+      else if (n === 38 || n === 48) {
+        const key = n === 38 ? 'fg' : 'bg';
+        if (codes[i+1] === 5 && Number.isInteger(codes[i+2]) && codes[i+2] >= 0 && codes[i+2] <= 255) { style[key] = color(codes[i+2]); i += 2; }
+        else if (codes[i+1] === 2 && codes.slice(i+2,i+5).length === 3 && codes.slice(i+2,i+5).every(c => Number.isInteger(c) && c >= 0 && c <= 255)) {
+          style[key] = `rgb(${codes.slice(i+2,i+5).join(',')})`; i += 4;
+        }
+      }
+    }
+  }
+  function csi(final) {
+    const n = Math.max(1, Number(escape) || 1);
+    if (final === 'm' && /^[0-9;]*$/.test(escape)) sgr(escape);
+    else if (final === 'K') {
+      if (escape === '2') cells = [];
+      else if (escape === '1') { for (let i = 0; i <= column && i < cells.length; i++) cells[i] = null; }
+      else cells.length = Math.min(cells.length, column);
+    } else if (final === 'G') column = Math.max(0, Math.min(16383, n - 1));
+    else if (final === 'C') column = Math.min(16383, column + n);
+    else if (final === 'D') column = Math.max(0, column - n);
+    else if (final === 'J' && escape === '2') { history.length = 0; historySize = 0; cells = []; column = 0; }
+  }
+  return {
+    append(text) {
+      for (const char of text) {
+        if (mode === 'osc') {
+          if (char === '\x07' || (oscEscape && char === '\\')) { mode = ''; oscEscape = false; }
+          else oscEscape = char === '\x1b';
+          continue;
+        }
+        if (mode === 'esc') { mode = char === '[' ? 'csi' : char === ']' ? 'osc' : ''; escape = ''; continue; }
+        if (mode === 'csi') {
+          if (char >= '@' && char <= '~') { csi(char); mode = ''; }
+          else if (escape.length < 256) escape += char;
+          else { mode = ''; escape = ''; }
+          continue;
+        }
+        if (char === '\x1b') mode = 'esc';
+        else if (char === '\r') column = 0;
+        else if (char === '\b') column = Math.max(0, column - 1);
+        else if (char === '\t') { const end = Math.min(16384, (Math.floor(column / 8) + 1) * 8); while (column < end) put(' '); }
+        else if (char === '\n') {
+          const line = lineHtml() + '\n'; history.push(line); historySize += line.length;
+          while (historySize > 2 * 1024 * 1024 && history.length) historySize -= history.shift().length;
+          cells = []; column = 0;
+        } else if (char >= ' ' && char !== '\x7f') put(char);
+      }
+    },
+    html() { return history.join('') + lineHtml(); },
+  };
+}
+const terminalStreams = new WeakMap();
 function appendBytes(node, bytes) {
-  const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-  const maxTerminalChars = 2 * 1024 * 1024;
-  const combined = node.textContent + text;
-  node.textContent = combined.length > maxTerminalChars
-    ? combined.slice(combined.length - maxTerminalChars)
-    : combined;
+  let stream = terminalStreams.get(node);
+  if (!stream) { stream = { decoder: new TextDecoder('utf-8', { fatal: false }), renderer: createTerminalRenderer() }; terminalStreams.set(node, stream); }
+  stream.renderer.append(stream.decoder.decode(bytes, { stream: true }));
+  node.innerHTML = stream.renderer.html();
   node.scrollTop = node.scrollHeight;
 }
 
@@ -329,7 +435,7 @@ function renderJobList() {
       `<td data-label="Job"><a class="job-name" href="/jobs/${encodeURIComponent(job.id)}">${escapeHtml(job.display_name)}</a>` +
         `<span class="row-subtitle">${escapeHtml(job.profile_name)} · ${escapeHtml(shortJobId(job.id))}</span></td>` +
       `<td data-label="State"><span class="status-pill ${stateTone(job.state)}">${escapeHtml(formatState(job.state))}</span>` +
-        `<span class="row-subtitle">${visibility}</span>${environmentText}</td>` +
+        `<span class="row-subtitle">${visibility}</span></td>` +
       `<td data-label="Process"><span class="row-value">PID ${escapeHtml(pid)}</span>` +
         `<span class="row-subtitle">${job.service_unit ? 'detached service' : (terminal.attached ? 'terminal attached' : 'no terminal at launch')}</span>${environmentText}</td>` +
       `<td data-label="Started"><span class="row-value">${escapeHtml(formatDate(job.started_at))}</span>${finished}</td>` +
@@ -800,35 +906,60 @@ async function refreshJobDetails(jobId) {
   }
 }
 
+const terminalConnections = new WeakMap();
 async function connectTerminal(jobId) {
   const terminal = document.getElementById('terminal');
   if (!terminal) return;
-
-  setConnection('Live output: loading history…', 'neutral');
-  try {
-    const response = await fetch(`/api/v1/jobs/${jobId}/output?from=0`, { cache: 'no-store' });
-    if (!response.ok) throw new Error(response.statusText || 'output unavailable');
-    const data = await response.json();
-    if (data.data_base64) appendBytes(terminal, b64decode(data.data_base64));
-  } catch (error) {
-    terminal.textContent = 'Terminal output is not available for the current session.';
-    setConnection('Live output: unavailable', 'warning');
-    return;
+  let state = terminalConnections.get(terminal);
+  if (!state) { state = { offset: 0, socket: null, queue: Promise.resolve(), retry: 1000 }; terminalConnections.set(terminal, state); }
+  if (state.socket && state.socket.readyState < 2) return;
+  async function catchUp() {
+    while (true) {
+      const response = await fetch(`/api/v1/jobs/${jobId}/output?from=${state.offset}`, { cache: 'no-store' });
+      if (!response.ok) throw new Error(response.statusText || 'output unavailable');
+      const data = await response.json();
+      const bytes = b64decode(data.data_base64 || '');
+      if (bytes.length) { appendBytes(terminal, bytes); state.offset += bytes.length; }
+      if (bytes.length < 1024 * 1024) break;
+    }
   }
-
+  function enqueue(action) {
+    if ((state.pending || 0) >= 256) { if (state.socket) state.socket.close(); return; }
+    state.pending = (state.pending || 0) + 1;
+    state.queue = state.queue.then(action).catch(() => {
+      setConnection('Live output: history unavailable; reconnecting', 'warning');
+      if (state.socket) state.socket.close();
+    }).finally(() => { state.pending -= 1; });
+  }
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${protocol}://${window.location.host}/api/v1/jobs/${jobId}/ws`);
+  state.socket = ws;
   setConnection('Live output: connecting…', 'neutral');
-  ws.onopen = () => { setConnection('Live output: connected', 'success'); };
+  ws.onopen = () => {
+    state.retry = 1000;
+    setConnection('Live output: connected', 'success');
+    enqueue(catchUp);
+  };
   ws.onerror = () => { setConnection('Live output: connection error', 'warning'); };
   ws.onclose = () => {
-    setConnection('Live output: disconnected', 'neutral');
+    state.socket = null;
+    setConnection('Live output: reconnecting…', 'warning');
+    window.setTimeout(() => connectTerminal(jobId), state.retry);
+    state.retry = Math.min(30000, state.retry * 2);
   };
   ws.onmessage = (event) => {
     let msg;
     try { msg = JSON.parse(event.data); } catch (error) { return; }
-    if (msg.type === 'output') {
-      appendBytes(terminal, b64decode(msg.data_base64));
+    if (msg.type === 'resync') enqueue(catchUp);
+    else if (msg.type === 'output') {
+      enqueue(async () => {
+        const bytes = b64decode(msg.data_base64);
+        if (Number.isSafeInteger(msg.byte_offset) && msg.byte_offset >= 0) {
+          if (msg.byte_offset > state.offset) await catchUp();
+          const skip = Math.max(0, state.offset - msg.byte_offset);
+          if (skip < bytes.length) { appendBytes(terminal, bytes.subarray(skip)); state.offset = msg.byte_offset + bytes.length; }
+        } else appendBytes(terminal, bytes);
+      });
     } else if (msg.type === 'state_changed') {
       const stateEl = document.getElementById('job-state');
       if (stateEl) {

@@ -579,7 +579,7 @@ impl Registry {
             .expect("store lock")
             .update_job(&job.record)
         {
-            job.record = previous;
+            job.record = previous.clone();
             if let Some(log) = job.log.as_mut() {
                 let _ = log.recover(
                     job.record.log.bytes_written,
@@ -592,6 +592,8 @@ impl Registry {
         let _ = self.broadcast_tx.send(jobwrap_web::ServerEvent::Output {
             job_id,
             sequence,
+            byte_offset: (job.record.log.bytes_written > previous.log.bytes_written)
+                .then_some(previous.log.bytes_written),
             data: data.to_vec(),
         });
         Ok(())
