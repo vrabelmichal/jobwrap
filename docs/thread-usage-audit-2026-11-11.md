@@ -216,3 +216,37 @@ Suggested implementation sequence: independent daemon startup, durable worker
 reconnection/results, unified diagnosis and safe control, then structured CLI
 and wait. The broken-pipe fix is a small separate task. Treat reboot recovery
 and richer application metadata as optional subsequent features.
+
+## Implementation follow-up (0.4.0-dev)
+
+Implemented in branch `feature/reliable-output-and-environments`, starting from
+this audit. Historical findings above remain tied to the 0.3.0 baseline.
+
+- `26ab3dd`: independent automatic daemon startup, protocol-v2 worker
+  reconnection, acknowledged output replay and durable completion recovery.
+- `567f978`: structured launch/query output, confirmed completion waiting,
+  diagnostic output and quiet handling of closed stdout pipes.
+- `8096106`: historical build/host/mode provenance and permission-aware Python
+  environment detection, display, search and filtering (venv, conda, uv).
+- `06c5963`: safe ANSI colors and progress updates, full history paging and
+  browser reconnect/catch-up without duplicating recorded bytes.
+- `80722e3`: reconnect/persistence hardening, shared recovery recording limits,
+  wrapper contact/output/disconnect observations, linked-worktree build metadata
+  tracking, and opt-in persistent named-server service-definition generation.
+- `2eb5d97`: upgrade management handles an incompatible old daemon through verified
+  socket credentials; it does not require the old wire protocol to stop it.
+
+Validation includes Rust workspace tests, strict Clippy, 17 browser-client tests,
+real isolated systemd services, launcher cgroup SIGKILL, live control after daemon
+restart, output/final-result recovery after worker exit, JSON/wait/pipe behavior,
+a real unactivated venv, environment privacy/filtering, and generated-unit syntax
+validation with `systemd-analyze --user verify`. Fixtures use separate state,
+ports and runtime paths; production workloads and the running daemon are untouched.
+
+Upgrade both CLI and daemon together. Existing old workers do not acquire new
+code, and a vanished PTY-owning wrapper cannot be adopted. `--no-record` output
+is live-only. Recording remains bounded; final outcomes can be preserved after
+output truncation. Persistent server units require explicit review/installation
+and user-manager startup policy; one-off jobs never gain automatic reboot restart.
+Optional application-specific progress integration and project/thread tagging
+remain extensions rather than prerequisites for reliable process supervision.
